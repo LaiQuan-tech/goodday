@@ -112,6 +112,7 @@ export const PURCHASE_MODE_LABEL: Record<string, string> = {
   rental: "月租",
   journey: "私人旅程",
   membership: "會員方案",
+  course: "課程",
 };
 
 export const PURCHASE_MODE_LABEL_EN: Record<string, string> = {
@@ -119,6 +120,7 @@ export const PURCHASE_MODE_LABEL_EN: Record<string, string> = {
   rental: "Monthly Rental",
   journey: "Private Journey",
   membership: "Membership",
+  course: "Course",
 };
 
 export function getPurchaseModeLabel(key: string, locale: Locale = "zh") {
@@ -171,6 +173,51 @@ export const BOOKING_STATUS_LABEL_EN: Record<string, string> = {
 
 export function getBookingStatusLabel(key: string, locale: Locale = "zh") {
   return label(BOOKING_STATUS_LABEL, BOOKING_STATUS_LABEL_EN, key, locale);
+}
+
+export const COURSE_KIND_LABEL: Record<string, string> = {
+  live: "報名課程",
+  recorded: "線上預錄",
+};
+
+export const COURSE_KIND_LABEL_EN: Record<string, string> = {
+  live: "Scheduled Class",
+  recorded: "On-Demand",
+};
+
+export function getCourseKindLabel(key: string, locale: Locale = "zh") {
+  return label(COURSE_KIND_LABEL, COURSE_KIND_LABEL_EN, key, locale);
+}
+
+export const ENROLLMENT_TYPE_LABEL: Record<string, string> = {
+  free: "免費報名",
+  paid: "付費報名",
+};
+
+export const ENROLLMENT_TYPE_LABEL_EN: Record<string, string> = {
+  free: "Free",
+  paid: "Paid",
+};
+
+export function getEnrollmentTypeLabel(key: string, locale: Locale = "zh") {
+  return label(ENROLLMENT_TYPE_LABEL, ENROLLMENT_TYPE_LABEL_EN, key, locale);
+}
+
+// reserved = 付費報名已佔位但尚未付款,逾期會被排程回收
+export const ENROLLMENT_STATUS_LABEL: Record<string, string> = {
+  reserved: "保留中",
+  confirmed: "已確認",
+  cancelled: "已取消",
+};
+
+export const ENROLLMENT_STATUS_LABEL_EN: Record<string, string> = {
+  reserved: "Reserved",
+  confirmed: "Confirmed",
+  cancelled: "Cancelled",
+};
+
+export function getEnrollmentStatusLabel(key: string, locale: Locale = "zh") {
+  return label(ENROLLMENT_STATUS_LABEL, ENROLLMENT_STATUS_LABEL_EN, key, locale);
 }
 
 export function formatPoints(points: number, locale: Locale = "zh") {
