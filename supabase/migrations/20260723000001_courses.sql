@@ -279,10 +279,17 @@ $$;
 -- ⚠️ 安全關鍵:security definer 函式預設 PUBLIC 可 EXECUTE,
 -- anon 拿 anon key 直接打 PostgREST /rest/v1/rpc/ 就能代任意 user_id 報名。
 -- 必須收回權限,只留 service_role(即 createAdminClient() 走的身分)。
-revoke execute on function public.reserve_course_seat(uuid, uuid, uuid, boolean, timestamptz, text, text, text) from public;
-revoke execute on function public.confirm_course_seats_for_order(uuid) from public;
-revoke execute on function public.release_course_seats_for_order(uuid) from public;
-revoke execute on function public.expire_course_reservations() from public;
+--
+-- ⚠️⚠️ 「revoke from public」不夠! Supabase 另外設了
+--   alter default privileges in schema public grant execute on functions to anon, authenticated
+-- 這是給「具名角色」的獨立授權,revoke from public 收不到它。
+-- 實測結果:只 revoke public 時 pg_proc.proacl 仍是
+--   anon=X/postgres | authenticated=X/postgres  ← 洞還在
+-- 所以下面三個對象缺一不可。改動本段前請先讀這段註解。
+revoke execute on function public.reserve_course_seat(uuid, uuid, uuid, boolean, timestamptz, text, text, text) from public, anon, authenticated;
+revoke execute on function public.confirm_course_seats_for_order(uuid) from public, anon, authenticated;
+revoke execute on function public.release_course_seats_for_order(uuid) from public, anon, authenticated;
+revoke execute on function public.expire_course_reservations() from public, anon, authenticated;
 
 grant execute on function public.reserve_course_seat(uuid, uuid, uuid, boolean, timestamptz, text, text, text) to service_role;
 grant execute on function public.confirm_course_seats_for_order(uuid) to service_role;
