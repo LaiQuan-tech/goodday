@@ -85,6 +85,138 @@ export async function archiveProduct(id: string) {
   revalidatePath("/products");
 }
 
+// ---------- 課程 ----------
+// <input type="datetime-local"> 送出的是沒有時區的牆上時間(2026-08-05T14:30)。
+// server action 跑在 UTC,直接 new Date() 會被當成 UTC 而整整差 8 小時
+// (之後 enroll_deadline < now() 之類的判斷就會全錯),故一律以台北時區解讀。
+function toTimestamptz(value: FormDataEntryValue | null) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null; // 沒填 = null,不能塞空字串進 timestamptz
+  return `${raw.length === 16 ? `${raw}:00` : raw}+08:00`;
+}
+
+// 一次寫 products(product_type='course')與 course_details 兩張表。
+// ⚠️ payload 永遠不含「已報名人數」欄位:那一欄只能由 migration 內的 SQL function 異動。
+export async function upsertCourse(formData: FormData) {
+  await requireAdmin();
+  const db = createAdminClient();
+
+  const id = String(formData.get("id") ?? "");
+  const imagesRaw = String(formData.get("images") ?? "").trim();
+  const images = imagesRaw
+    ? imagesRaw
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((url) => ({ url }))
+    : [];
+
+  const courseKind = String(formData.get("course_kind")) === "recorded" ? "recorded" : "live";
+
+  // 對齊 DB 的兩個跨欄位 CHECK:預錄課程沒有免費報名與名額的概念。
+  // 在這裡先擋掉,避免使用者撞到 constraint 錯誤訊息。
+  const enrollmentType =
+    courseKind === "recorded"
+      ? "paid"
+      : String(formData.get("enrollment_type")) === "free"
+        ? "free"
+        : "paid";
+
+  const capacityRaw = String(formData.get("capacity") ?? "").trim();
+  const capacityNum = parseInt(capacityRaw, 10);
+  const capacity =
+    courseKind === "recorded" || !capacityRaw || !Number.isFinite(capacityNum) || capacityNum <= 0
+      ? null // null = 不限名額
+      : capacityNum;
+
+  // productPayload 放在 enrollmentType 之後才組:免費報名的課一律把價格歸零。
+  // 否則前台會顯示金額、實際卻不收錢(免費報名不建訂單),等於掛錯價目。
+  const productPayload = {
+    name: String(formData.get("name") ?? "").trim(),
+    slug: String(formData.get("slug") ?? "").trim().toLowerCase(),
+    description: String(formData.get("description") ?? ""),
+    price:
+      enrollmentType === "free"
+        ? 0
+        : Math.max(0, parseInt(String(formData.get("price") ?? "0"), 10) || 0),
+    status: ["draft", "active", "archived"].includes(String(formData.get("status")))
+      ? String(formData.get("status"))
+      : "draft",
+    featured: formData.get("featured") === "on",
+    sort_order: parseInt(String(formData.get("sort_order") ?? "0"), 10) || 0,
+    images,
+    product_type: "course", // 寫死,不接受表單傳入
+    stock: 0,               // 課程不走庫存,名額由 course_details.capacity 控管
+  };
+
+  if (!productPayload.name || !productPayload.slug) throw new Error("名稱與網址代稱必填");
+
+  // 付費課程沒有價格會變成 0 元訂單,結帳流程會走得很怪,直接擋在這裡
+  if (enrollmentType === "paid" && productPayload.price <= 0) {
+    throw new Error("付費課程的價格必須大於 0");
+  }
+
+  const detailPayload = {
+    course_kind: courseKind,
+    enrollment_type: enrollmentType,
+    instructor: String(formData.get("instructor") ?? "").trim(),
+    outline: String(formData.get("outline") ?? ""),
+    location: courseKind === "recorded" ? "" : String(formData.get("location") ?? "").trim(),
+    starts_at: courseKind === "recorded" ? null : toTimestamptz(formData.get("starts_at")),
+    ends_at: courseKind === "recorded" ? null : toTimestamptz(formData.get("ends_at")),
+    enroll_deadline: toTimestamptz(formData.get("enroll_deadline")),
+    capacity,
+  };
+
+  if (id) {
+    const { error } = await db.from("products").update(productPayload).eq("id", id);
+    if (error) throw new Error(`儲存失敗:${error.message}`);
+
+    // 用 update 而非 upsert:upsert 會整列覆寫,可能把已報名人數打回預設值
+    const { data: updated, error: detailError } = await db
+      .from("course_details")
+      .update(detailPayload)
+      .eq("product_id", id)
+      .select("product_id");
+    if (detailError) throw new Error(`儲存失敗:${detailError.message}`);
+    // 舊資料沒有對應的 course_details 時補建一筆
+    if (!updated || updated.length === 0) {
+      const { error: insertError } = await db
+        .from("course_details")
+        .insert({ ...detailPayload, product_id: id });
+      if (insertError) throw new Error(`儲存失敗:${insertError.message}`);
+    }
+  } else {
+    const { data: created, error } = await db
+      .from("products")
+      .insert(productPayload)
+      .select("id")
+      .single();
+    if (error || !created) throw new Error(`建立失敗:${error?.message ?? "未知錯誤"}`);
+
+    const { error: detailError } = await db
+      .from("course_details")
+      .insert({ ...detailPayload, product_id: created.id });
+    if (detailError) {
+      // 避免留下沒有課程細節的孤兒商品(列表頁會缺資料)
+      await db.from("products").delete().eq("id", created.id);
+      throw new Error(`建立失敗:${detailError.message}`);
+    }
+  }
+
+  revalidatePath("/admin/courses");
+  revalidatePath("/products");
+}
+
+// 軟刪除:只把 products.status 設 archived,course_details 與報名紀錄都保留
+export async function archiveCourse(id: string) {
+  await requireAdmin();
+  const db = createAdminClient();
+  await db.from("products").update({ status: "archived" }).eq("id", id);
+  revalidatePath("/admin/courses");
+  revalidatePath("/products");
+}
+
 // ---------- 訂單 ----------
 const ORDER_TRANSITIONS: Record<string, string[]> = {
   pending: ["paid", "cancelled"],

@@ -10,7 +10,7 @@ export type Profile = {
   created_at: string;
 };
 
-export type ProductType = "artwork" | "journey" | "membership";
+export type ProductType = "artwork" | "journey" | "membership" | "course";
 
 export type Product = {
   id: string;
@@ -90,7 +90,7 @@ export type Order = {
   locale: "zh" | "en";
 };
 
-export type PurchaseMode = "buyout" | "rental" | "journey" | "membership";
+export type PurchaseMode = "buyout" | "rental" | "journey" | "membership" | "course";
 
 export type OrderItem = {
   id: string;
@@ -202,4 +202,67 @@ export type Booking = {
   message: string | null;
   status: BookingStatus;
   created_at: string;
+};
+
+// ---------- 課程 ----------
+// live = 報名型(有日期、可設名額、可免費);recorded = 線上預錄(一律付費、無名額)
+export type CourseKind = "live" | "recorded";
+
+export type EnrollmentType = "free" | "paid";
+
+// 與 products 一對一(product_id 同時是 PK 與 FK)
+export type CourseDetail = {
+  product_id: string;
+  course_kind: CourseKind;
+  enrollment_type: EnrollmentType;
+  instructor: string;
+  outline: string;
+  location: string;
+  starts_at: string | null;
+  ends_at: string | null;
+  enroll_deadline: string | null;
+  capacity: number | null; // null = 不限名額
+  seats_taken: number;     // 唯讀:只能由 migration 內的 SQL function 異動
+  created_at: string;
+  updated_at: string;
+};
+
+export type CourseLesson = {
+  id: string;
+  product_id: string;
+  title: string;
+  description: string;
+  youtube_video_id: string; // 只存 11 碼 id,不存完整網址
+  duration_seconds: number | null;
+  is_preview: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CourseEnrollment = {
+  id: string;
+  product_id: string;
+  user_id: string;
+  order_id: string | null;
+  status: "reserved" | "confirmed" | "cancelled";
+  contact_name: string;
+  contact_email: string;
+  contact_phone: string;
+  note: string;
+  expires_at: string | null;
+  confirmed_at: string | null;
+  cancelled_at: string | null;
+  created_at: string;
+};
+
+export type CourseAccess = {
+  id: string;
+  user_id: string;
+  product_id: string;
+  source: "purchase" | "enrollment" | "manual";
+  source_ref_id: string | null;
+  note: string;
+  granted_at: string;
+  revoked_at: string | null;
 };
