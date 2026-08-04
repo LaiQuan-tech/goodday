@@ -61,6 +61,15 @@ export default function CourseForm({
           <label className="iv-label">課程名稱 *</label>
           <input name="name" required className="iv-input" defaultValue={product?.name ?? ""} />
         </div>
+        <div className="sm:col-span-2">
+          <label className="iv-label">英文名稱(選填)</label>
+          <input
+            name="name_en"
+            className="iv-input"
+            defaultValue={product?.name_en ?? ""}
+            placeholder="留空則英文站顯示中文名稱"
+          />
+        </div>
         <div>
           <label className="iv-label">網址代稱(slug)*</label>
           <input
@@ -200,6 +209,16 @@ export default function CourseForm({
             rows={4}
             className="iv-input min-h-24"
             defaultValue={product?.description ?? ""}
+          />
+        </div>
+        <div className="sm:col-span-2">
+          <label className="iv-label">英文簡介(選填)</label>
+          <textarea
+            name="description_en"
+            rows={4}
+            className="iv-input min-h-24"
+            defaultValue={product?.description_en ?? ""}
+            placeholder="留空則英文站顯示中文簡介"
           />
         </div>
         <div className="sm:col-span-2">

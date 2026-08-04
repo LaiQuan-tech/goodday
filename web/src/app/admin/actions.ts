@@ -129,12 +129,18 @@ export async function upsertCourse(formData: FormData) {
       ? null // null = 不限名額
       : capacityNum;
 
+  // 英文欄位選填,留空一律存 null(渲染端 localizeText 靠 null 判斷「尚未翻譯,fallback 中文」)。
+  const nameEnRaw = String(formData.get("name_en") ?? "").trim();
+  const descriptionEnRaw = String(formData.get("description_en") ?? "").trim();
+
   // productPayload 放在 enrollmentType 之後才組:免費報名的課一律把價格歸零。
   // 否則前台會顯示金額、實際卻不收錢(免費報名不建訂單),等於掛錯價目。
   const productPayload = {
     name: String(formData.get("name") ?? "").trim(),
     slug: String(formData.get("slug") ?? "").trim().toLowerCase(),
     description: String(formData.get("description") ?? ""),
+    name_en: nameEnRaw || null,
+    description_en: descriptionEnRaw || null,
     price:
       enrollmentType === "free"
         ? 0
