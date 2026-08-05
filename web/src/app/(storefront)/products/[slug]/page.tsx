@@ -1,13 +1,23 @@
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { formatTWD, formatPoints, localizeText, localizeList, getCategoryLabel } from "@/lib/format";
+import { createClient } from "@/lib/supabase/server";
+import {
+  formatTWD,
+  formatPoints,
+  formatDateTime,
+  localizeText,
+  localizeList,
+  getCategoryLabel,
+  getCourseKindLabel,
+} from "@/lib/format";
 import Placeholder, { gradientForId } from "@/components/Placeholder";
 import ArtworkPurchaseSection from "@/components/ArtworkPurchaseSection";
+import CourseEnrollSection from "@/components/CourseEnrollSection";
 import QuickAddButton from "@/components/QuickAddButton";
 import OpenChatButton from "@/components/OpenChatButton";
 import { getLocale, getMessages } from "@/lib/i18n/server";
-import type { MembershipTier, Product } from "@/lib/types";
+import type { CourseDetail, MembershipTier, Product } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +40,16 @@ export async function generateMetadata({
   };
 }
 
+// 課程資訊列(講師 / 時間 / 地點 / 截止 / 名額)共用排版
+function CourseInfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex gap-3">
+      <span className="w-24 shrink-0 text-muted-2">{label}</span>
+      <span className="text-ink-soft">{value}</span>
+    </div>
+  );
+}
+
 export default async function ProductDetailPage({
   params,
 }: {
@@ -41,6 +61,9 @@ export default async function ProductDetailPage({
 
   let product: Product | null = null;
   let tier: MembershipTier | null = null;
+  let courseDetail: CourseDetail | null = null;
+  let loggedIn = false;
+  let enrolled = false;
   try {
     const supabase = createAdminClient();
     const { data } = await supabase
@@ -62,6 +85,33 @@ export default async function ProductDetailPage({
         tier = tierData as MembershipTier | null;
       }
     }
+
+    if (product?.product_type === "course") {
+      const { data: detailData } = await supabase
+        .from("course_details")
+        .select("*")
+        .eq("product_id", product.id)
+        .maybeSingle();
+      courseDetail = detailData as CourseDetail | null;
+
+      // createClient() 只用來取登入身分,報名紀錄仍走 service role 查
+      const authClient = await createClient();
+      const {
+        data: { user },
+      } = await authClient.auth.getUser();
+      loggedIn = user != null;
+      if (user) {
+        // 同一人同一堂課只會有一筆非 cancelled 的報名(DB 唯一索引保證)
+        const { data: enrollment } = await supabase
+          .from("course_enrollments")
+          .select("id")
+          .eq("product_id", product.id)
+          .eq("user_id", user.id)
+          .neq("status", "cancelled")
+          .maybeSingle();
+        enrolled = enrollment != null;
+      }
+    }
   } catch {
     /* env 未設定 */
   }
@@ -79,6 +129,20 @@ export default async function ProductDetailPage({
   const displayName = localizeText(product.name, product.name_en, locale);
   const displayDescription = localizeText(product.description, product.description_en, locale);
   const displayDuration = localizeText(metadata?.duration ?? "", metadata?.duration_en, locale);
+
+  // capacity 為 null 代表不限名額;有上限時顯示剩餘數(無插值機制,前後綴自行串接)
+  const courseSeatsText = !courseDetail
+    ? ""
+    : courseDetail.capacity === null
+      ? messages.courses.seatsUnlimited
+      : courseDetail.seats_taken >= courseDetail.capacity
+        ? messages.courses.seatsFull
+        : `${messages.courses.seatsLeftPrefix}${courseDetail.capacity - courseDetail.seats_taken}${messages.courses.seatsLeftSuffix}`;
+  const courseScheduleText = !courseDetail?.starts_at
+    ? messages.courses.dateTba
+    : courseDetail.ends_at
+      ? `${formatDateTime(courseDetail.starts_at, locale)} – ${formatDateTime(courseDetail.ends_at, locale)}`
+      : formatDateTime(courseDetail.starts_at, locale);
 
   return (
     <div className="lm-container py-12 sm:py-16">
@@ -158,6 +222,79 @@ export default async function ProductDetailPage({
                   label={messages.product.membershipJoin}
                   addedLabel={messages.product.addedToCart}
                   className="iv-btn-primary w-full sm:w-auto"
+                />
+              </div>
+            )}
+
+            {product.product_type === "course" && courseDetail && (
+              <div>
+                <div className="mb-2 flex items-center gap-2">
+                  <span className="border border-line-2 bg-panel px-2.5 py-1 text-[11px] tracking-[0.1em] text-accent">
+                    {getCourseKindLabel(courseDetail.course_kind, locale)}
+                  </span>
+                </div>
+                <div className="mb-5 font-serif text-[28px] text-ink">
+                  {courseDetail.enrollment_type === "free"
+                    ? messages.courses.freeLabel
+                    : formatTWD(product.price, locale)}
+                </div>
+
+                <div className="mb-6 flex flex-col gap-2 text-[14px] leading-[1.7]">
+                  {courseDetail.instructor && (
+                    <CourseInfoRow
+                      label={messages.courses.instructorLabel}
+                      value={courseDetail.instructor}
+                    />
+                  )}
+                  {courseDetail.course_kind === "live" && (
+                    <>
+                      <CourseInfoRow
+                        label={messages.courses.scheduleTitle}
+                        value={courseScheduleText}
+                      />
+                      {courseDetail.location && (
+                        <CourseInfoRow
+                          label={messages.courses.locationLabel}
+                          value={courseDetail.location}
+                        />
+                      )}
+                      <CourseInfoRow
+                        label={messages.courses.seatsTitle}
+                        value={courseSeatsText}
+                      />
+                    </>
+                  )}
+                  {courseDetail.enroll_deadline && (
+                    <CourseInfoRow
+                      label={messages.courses.deadlineLabel}
+                      value={formatDateTime(courseDetail.enroll_deadline, locale)}
+                    />
+                  )}
+                </div>
+
+                {courseDetail.outline && (
+                  <div className="mb-6">
+                    <h2 className="mb-2 font-serif text-[17px] text-ink">
+                      {messages.courses.outlineTitle}
+                    </h2>
+                    <p className="whitespace-pre-wrap text-[14px] leading-[1.9] text-ink-soft">
+                      {courseDetail.outline}
+                    </p>
+                  </div>
+                )}
+
+                <CourseEnrollSection
+                  productId={product.id}
+                  slug={product.slug}
+                  enrollmentType={courseDetail.enrollment_type}
+                  capacity={courseDetail.capacity}
+                  seatsTaken={courseDetail.seats_taken}
+                  closed={
+                    courseDetail.enroll_deadline != null &&
+                    new Date(courseDetail.enroll_deadline).getTime() < Date.now()
+                  }
+                  loggedIn={loggedIn}
+                  enrolled={enrolled}
                 />
               </div>
             )}

@@ -18,6 +18,7 @@ export const NAV_ITEMS: {
   { href: "/gallery", labelKey: "gallery", match: (p: string) => p.startsWith("/gallery") || p.startsWith("/products") },
   { href: "/journeys", labelKey: "journeys", match: (p: string) => p.startsWith("/journeys") },
   { href: "/rental", labelKey: "rental", match: (p: string) => p.startsWith("/rental") },
+  { href: "/courses", labelKey: "courses", match: (p: string) => p.startsWith("/courses") },
   { href: "/membership", labelKey: "membership", match: (p: string) => p.startsWith("/membership") },
 ];
 
