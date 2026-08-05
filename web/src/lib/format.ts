@@ -1,5 +1,13 @@
 import type { Locale } from "@/lib/i18n/config";
 
+// 這是台灣的店,所有對外顯示的日期時間一律以台北時間呈現。
+//
+// ⚠️ 這行不可省略。Vercel 的 serverless 執行環境是 UTC,少了 timeZone 會直接
+// 拿 UTC 當地方時間 render——實測課程 starts_at 存 2026-08-04 19:30+08,
+// 頁面卻顯示「上午 11:30」,整整差 8 小時,客人會照錯的時間來上課。
+// 靠環境變數 TZ 不可靠(Vercel 專案目前根本沒設),所以寫死在這裡。
+const TZ = "Asia/Taipei";
+
 export function formatTWD(amount: number, locale: Locale = "zh") {
   return `NT$ ${amount.toLocaleString(locale === "en" ? "en-US" : "zh-TW")}`;
 }
@@ -11,6 +19,7 @@ export function formatDate(
   if (!value) return "—";
   const d = typeof value === "string" ? new Date(value) : value;
   return d.toLocaleDateString(locale === "en" ? "en-US" : "zh-TW", {
+    timeZone: TZ,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -24,6 +33,7 @@ export function formatDateTime(
   if (!value) return "—";
   const d = typeof value === "string" ? new Date(value) : value;
   return d.toLocaleString(locale === "en" ? "en-US" : "zh-TW", {
+    timeZone: TZ,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
