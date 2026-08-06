@@ -232,24 +232,24 @@ export default async function CourseLandingPage({
         <div
           className={`absolute inset-0 flex flex-col justify-end bg-gradient-to-b px-6 py-10 sm:px-16 sm:py-15 ${
             heroSrc
-              ? "from-ink-deep/45 via-ink-deep/15 to-ink-deep/75"
-              : "from-ink-deep/55 to-ink-deep/80"
+              ? "from-ink-deep/50 via-ink-deep/40 to-ink-deep/88"
+              : "from-ink-deep/55 via-ink-deep/45 to-ink-deep/85"
           }`}
         >
           <div className="lm-container !px-0">
             <span className="inline-flex border border-gold-bright/50 px-2.5 py-1 text-[11px] tracking-[0.1em] text-gold-bright">
               {getCourseKindLabel(detail.course_kind, locale)}
             </span>
-            <h1 className="mt-4 max-w-180 font-serif text-[27px] font-normal leading-[1.35] tracking-[0.04em] text-cream-text sm:text-[44px] lg:text-[54px]">
+            <h1 className="mt-4 max-w-180 font-serif text-[27px] font-normal leading-[1.35] tracking-[0.04em] text-cream-text [text-shadow:0_2px_18px_rgba(20,15,8,0.75)] sm:text-[44px] lg:text-[54px]">
               {displayName}
             </h1>
             {subtitle && (
-              <p className="mt-4 max-w-150 text-[15px] leading-[1.9] text-cream-soft-2 sm:text-[17px]">
+              <p className="mt-4 max-w-150 text-[15px] leading-[1.9] text-cream-soft-2 [text-shadow:0_1px_12px_rgba(20,15,8,0.7)] sm:text-[17px]">
                 {subtitle}
               </p>
             )}
             {(heroDateText || (isLive && location)) && (
-              <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px] text-cream-soft sm:text-[14px]">
+              <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px] text-cream-soft [text-shadow:0_1px_12px_rgba(20,15,8,0.7)] sm:text-[14px]">
                 {heroDateText && <span>{heroDateText}</span>}
                 {isLive && location && <span>{location}</span>}
               </div>
