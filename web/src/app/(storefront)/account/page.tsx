@@ -218,7 +218,7 @@ export default async function AccountPage() {
               return (
                 <Link
                   key={e.id}
-                  href={localeHref(`/products/${p.slug}`, locale)}
+                  href={localeHref(`/courses/${p.slug}`, locale)}
                   className="iv-card flex items-center justify-between gap-3 !p-4 transition-colors hover:border-gold"
                 >
                   <div>

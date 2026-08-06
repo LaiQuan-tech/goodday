@@ -101,7 +101,7 @@ export default function CourseEnrollSection({
   if (!loggedIn) {
     body = (
       <Link
-        href={localeHref(`/login?redirect=/products/${slug}`, locale)}
+        href={localeHref(`/login?redirect=/courses/${slug}`, locale)}
         className="iv-btn-primary w-full sm:w-auto"
       >
         {t.loginToEnroll}

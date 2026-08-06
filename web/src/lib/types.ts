@@ -210,7 +210,19 @@ export type CourseKind = "live" | "recorded";
 
 export type EnrollmentType = "free" | "paid";
 
+// 課程活動頁的常見問答。DB 存 jsonb 陣列(course_details.faq),
+// CHECK 只保證「是陣列」,逐筆形狀由 server action 清洗後才寫入。
+// q_en/a_en 未填 → 英文站 fallback 中文(localizeText 慣例)。
+export type CourseFaqItem = {
+  q: string;
+  a: string;
+  q_en?: string;
+  a_en?: string;
+};
+
 // 與 products 一對一(product_id 同時是 PK 與 FK)
+// ⚠️ migration 20260806000001_course_landing 新增的活動頁欄位一律 `text not null default ''`,
+// 所以型別是 string(不是 string | null)——「沒填」是空字串,渲染端一律以 truthy 判斷是否整區不渲染。
 export type CourseDetail = {
   product_id: string;
   course_kind: CourseKind;
@@ -225,6 +237,23 @@ export type CourseDetail = {
   seats_taken: number;     // 唯讀:只能由 migration 內的 SQL function 異動
   created_at: string;
   updated_at: string;
+  // ---- 活動宣傳頁欄位 ----
+  subtitle: string;              // hero 副標語
+  subtitle_en: string;
+  pain_points: string;           // 痛點引入段落,以 \n\n 分段
+  pain_points_en: string;
+  benefits: string;              // 你會獲得什麼,一行一項
+  benefits_en: string;
+  outline_en: string;            // 課程大綱英文版
+  location_en: string;
+  instructor_title: string;      // 講師頭銜
+  instructor_title_en: string;
+  instructor_bio: string;        // 講師長介紹
+  instructor_bio_en: string;
+  instructor_photo_url: string;  // 單一網址,不是陣列
+  fee_note: string;              // 費用補充說明
+  fee_note_en: string;
+  faq: CourseFaqItem[];
 };
 
 export type CourseLesson = {

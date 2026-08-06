@@ -110,7 +110,8 @@ export async function enrollFreeCourse(
   }
 
   revalidatePath("/courses");
-  revalidatePath(`/products/${product.slug}`);
+  // 課程詳情頁已改為 /courses/<slug>(/products/<slug> 只剩 301 轉址)
+  revalidatePath(`/courses/${product.slug}`);
   revalidatePath("/account");
 
   return { ok: true };

@@ -91,7 +91,7 @@ function CourseCard({
 
   return (
     <Link
-      href={localeHref(`/products/${product.slug}`, locale)}
+      href={localeHref(`/courses/${product.slug}`, locale)}
       className="group block"
     >
       <Placeholder

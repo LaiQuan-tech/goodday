@@ -169,6 +169,19 @@ const zh = {
     seatsFull: "已額滿",
     dateTba: "時間待定",
     viewDetail: "查看課程 →",
+    // ---- 課程活動頁(/courses/<slug>)的區塊標題與 CTA ----
+    // 對應的 DB 欄位留白時,該區塊整區不渲染,所以這裡不需要任何 empty state 文案。
+    heroCta: "立即報名",
+    painTitle: "如果你也有這些困擾",
+    contentTitle: "課程內容",
+    benefitsTitle: "你會獲得什麼",
+    instructorSectionTitle: "關於講師",
+    infoTitle: "時間・地點・費用",
+    feeLabel: "費用",
+    feeNoteLabel: "費用說明",
+    enrollTitle: "報名這堂課",
+    faqTitle: "常見問答",
+    stickyEnroll: "立即報名",
     // ---- 報名區塊(CourseEnrollSection)----
     enrollFree: "免費報名",
     enrolling: "報名中…",

@@ -135,6 +135,67 @@ function toTimestamptz(value: FormDataEntryValue | null) {
   return `${raw.length === 16 ? `${raw}:00` : raw}+08:00`;
 }
 
+// ---------- FAQ 欄位 ----------
+// 後台用 textarea 收「一行一組、以 | 分隔」的問答(問題|答案),中英文各一個欄位。
+// DB 的 CHECK 只擋「必須是陣列」,逐筆形狀要在這裡清洗乾淨才寫入。
+const MAX_FAQ_ITEMS = 30;
+
+function splitFaqLine(line: string): { q: string; a: string } {
+  const sep = line.indexOf("|");
+  // 沒有 | 的行:整行當問題、答案留空(不要整行丟掉,經營者只是還沒寫答案)
+  if (sep < 0) return { q: line.trim(), a: "" };
+  return { q: line.slice(0, sep).trim(), a: line.slice(sep + 1).trim() };
+}
+
+// 英文 FAQ 依「索引」對應合併:第 n 行英文 = 第 n 筆中文的翻譯。
+// 中文沒有的索引直接忽略(英文不獨立成筆,否則英文站會冒出中文站看不到的問答)。
+function parseFaqField(formData: FormData) {
+  const zh = String(formData.get("faq") ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0) // 空行跳過(貼上時很容易多出空行)
+    .slice(0, MAX_FAQ_ITEMS)
+    .map(splitFaqLine)
+    .filter((item) => item.q.length > 0);
+
+  // ⚠️ 英文這一份刻意「不」跳過空行:空行代表「這一筆還沒翻譯」,
+  // 跳掉會讓它後面每一筆都往前錯一格(第 3 題的英文答案掛到第 2 題上)。
+  // 索引對齊比省掉幾個空行重要,後台欄位說明也是這樣寫的。
+  const en = String(formData.get("faq_en") ?? "")
+    .split("\n")
+    .slice(0, MAX_FAQ_ITEMS)
+    .map((line) => splitFaqLine(line.trim()));
+
+  return zh.map((item, index) => {
+    const translated = en[index];
+    return {
+      q: item.q,
+      a: item.a,
+      ...(translated?.q ? { q_en: translated.q } : {}),
+      ...(translated?.a ? { a_en: translated.a } : {}),
+    };
+  });
+}
+
+// 講師照片走 ImageUploader(name="instructor_photo", max=1),送出的仍是 JSON 陣列;
+// DB 欄位是單一字串,所以取第一張的 url,沒有就存空字串(欄位 not null)。
+function parseInstructorPhoto(formData: FormData): string {
+  const raw = String(formData.get("instructor_photo") ?? "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return "";
+    const first = parsed[0] as { url?: unknown } | string | undefined;
+    const url = typeof first === "string" ? first.trim() : String(first?.url ?? "").trim();
+    // 與商品圖同一條白名單:非自家 bucket 的網址前台 next/image 渲染不出來。
+    return url.startsWith(productImagePrefix()) ? url : "";
+  } catch {
+    // 這裡與 parseImagesField 不同,壞掉不 throw:講師照片是單一選填欄位,
+    // 存不進去頂多少一張照片(整區文字仍在),不像商品圖會「靜默清空整組主視覺」。
+    return "";
+  }
+}
+
 // 一次寫 products(product_type='course')與 course_details 兩張表。
 // ⚠️ payload 永遠不含「已報名人數」欄位:那一欄只能由 migration 內的 SQL function 異動。
 export async function upsertCourse(formData: FormData) {
@@ -195,6 +256,9 @@ export async function upsertCourse(formData: FormData) {
     throw new Error("付費課程的價格必須大於 0");
   }
 
+  // 活動頁欄位一律 `text not null default ''`,沒填就存空字串(不能存 null)。
+  const text = (key: string) => String(formData.get(key) ?? "").trim();
+
   const detailPayload = {
     course_kind: courseKind,
     enrollment_type: enrollmentType,
@@ -205,6 +269,24 @@ export async function upsertCourse(formData: FormData) {
     ends_at: courseKind === "recorded" ? null : toTimestamptz(formData.get("ends_at")),
     enroll_deadline: toTimestamptz(formData.get("enroll_deadline")),
     capacity,
+    // ---- 活動宣傳頁欄位 ----
+    subtitle: text("subtitle"),
+    subtitle_en: text("subtitle_en"),
+    pain_points: String(formData.get("pain_points") ?? "").trim(),
+    pain_points_en: String(formData.get("pain_points_en") ?? "").trim(),
+    benefits: String(formData.get("benefits") ?? "").trim(),
+    benefits_en: String(formData.get("benefits_en") ?? "").trim(),
+    outline_en: String(formData.get("outline_en") ?? ""),
+    // 預錄課程沒有地點(與 location 同規則,否則英文站會冒出中文站看不到的地點)
+    location_en: courseKind === "recorded" ? "" : text("location_en"),
+    instructor_title: text("instructor_title"),
+    instructor_title_en: text("instructor_title_en"),
+    instructor_bio: String(formData.get("instructor_bio") ?? "").trim(),
+    instructor_bio_en: String(formData.get("instructor_bio_en") ?? "").trim(),
+    instructor_photo_url: parseInstructorPhoto(formData),
+    fee_note: String(formData.get("fee_note") ?? "").trim(),
+    fee_note_en: String(formData.get("fee_note_en") ?? "").trim(),
+    faq: parseFaqField(formData),
   };
 
   if (id) {
@@ -244,6 +326,9 @@ export async function upsertCourse(formData: FormData) {
   }
 
   revalidatePath("/admin/courses");
+  revalidatePath("/courses");
+  // 課程詳情頁已改為 /courses/<slug>(/products/<slug> 只剩 301 轉址)
+  revalidatePath(`/courses/${productPayload.slug}`);
   revalidatePath("/products");
 }
 
@@ -255,14 +340,17 @@ export async function setCourseStatus(id: string, status: string) {
     throw new Error("狀態不正確");
   }
   const db = createAdminClient();
-  const { error } = await db
+  // 詳情頁快取要按 slug 清,所以更新時一併把 slug 撈回來(update…select 一次搞定)
+  const { data: updated, error } = await db
     .from("products")
     .update({ status })
     .eq("id", id)
-    .eq("product_type", "course"); // 防呆:這支只能動課程,不能拿去改一般商品
+    .eq("product_type", "course") // 防呆:這支只能動課程,不能拿去改一般商品
+    .select("slug");
   if (error) throw new Error(`操作失敗:${error.message}`);
   revalidatePath("/admin/courses");
   revalidatePath("/courses");
+  if (updated?.[0]?.slug) revalidatePath(`/courses/${updated[0].slug}`);
   revalidatePath("/products");
 }
 
@@ -270,8 +358,14 @@ export async function setCourseStatus(id: string, status: string) {
 export async function archiveCourse(id: string) {
   await requireAdmin();
   const db = createAdminClient();
-  await db.from("products").update({ status: "archived" }).eq("id", id);
+  const { data: updated } = await db
+    .from("products")
+    .update({ status: "archived" })
+    .eq("id", id)
+    .select("slug");
   revalidatePath("/admin/courses");
+  revalidatePath("/courses");
+  if (updated?.[0]?.slug) revalidatePath(`/courses/${updated[0].slug}`);
   revalidatePath("/products");
 }
 

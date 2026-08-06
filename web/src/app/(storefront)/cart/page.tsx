@@ -54,7 +54,13 @@ export default function CartPage() {
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <Link
-                        href={localeHref(`/products/${item.slug}`, locale)}
+                        // 課程的詳情頁在 /courses/<slug>(活動宣傳頁),不是通用商品頁
+                        href={localeHref(
+                          item.mode === "course"
+                            ? `/courses/${item.slug}`
+                            : `/products/${item.slug}`,
+                          locale
+                        )}
                         className="line-clamp-2 text-sm font-medium text-ink sm:text-base"
                       >
                         {localizeText(item.name, item.name_en, locale)}
