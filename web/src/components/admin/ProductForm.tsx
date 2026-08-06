@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { archiveProduct, upsertProduct } from "@/app/admin/actions";
+import ImageUploader from "@/components/admin/ImageUploader";
 import type { Product } from "@/lib/types";
 
 export default function ProductForm({ product }: { product: Product | null }) {
@@ -115,17 +116,7 @@ export default function ProductForm({ product }: { product: Product | null }) {
           />
         </div>
         <div className="sm:col-span-2">
-          <label className="iv-label">圖片網址(一行一個)</label>
-          <textarea
-            name="images"
-            rows={3}
-            className="iv-input min-h-20"
-            placeholder="https://…"
-            defaultValue={(product?.images ?? []).map((i) => i.url).join("\n")}
-          />
-          <p className="mt-1 text-xs text-ink-soft">
-            可使用 Supabase Storage 或任何圖床網址。
-          </p>
+          <ImageUploader initial={product?.images ?? []} />
         </div>
         <label className="flex items-center gap-2 text-sm">
           <input

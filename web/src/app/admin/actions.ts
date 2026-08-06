@@ -28,20 +28,59 @@ async function requireAdmin() {
   return user;
 }
 
+// ---------- 圖片欄位 ----------
+// 後台圖片欄位由 components/admin/ImageUploader.tsx 的 hidden input 送出 JSON 陣列
+// (格式 [{url, alt?}, …]),upsertProduct 與 upsertCourse 共用這支解析。
+const MAX_IMAGES = 8;
+const MAX_ALT_LENGTH = 200;
+// 白名單:只收自家 product-images bucket 的 public URL。
+// 這同時修掉一個既有的雷:next.config.ts 的 images.remotePatterns 只允許 *.supabase.co,
+// 以前管理員貼外部圖床網址存得進 DB,前台 next/image 卻直接拒絕 → 變灰底佔位圖。
+// 從源頭擋掉,DB 裡就不會再出現渲染不出來的網址。
+function productImagePrefix() {
+  return `${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}/storage/v1/object/public/product-images/`;
+}
+
+function parseImagesField(formData: FormData): { url: string; alt?: string }[] {
+  const raw = String(formData.get("images") ?? "").trim();
+
+  // ⚠️⚠️ JSON 壞掉一律 throw,絕對不可以 catch 成 `images = []`。
+  // 那會讓「表單送出的 JSON 有問題」變成「靜默清空這個商品的所有圖片」——
+  // 管理員只會看到「儲存成功」,回到前台才發現圖全沒了,而且原始網址已經被覆蓋掉救不回來。
+  // 寧可整筆儲存失敗、要管理員重新整理再存,也不要無聲刪圖。
+  // 同理:空字串(欄位根本沒送出)也是異常,不是「沒有圖片」——沒有圖片送出的是 "[]"。
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("圖片欄位格式異常,為避免誤刪既有圖片已中止儲存,請重新整理頁面後再試");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("圖片欄位格式異常,為避免誤刪既有圖片已中止儲存,請重新整理頁面後再試");
+  }
+
+  const prefix = productImagePrefix();
+  const images: { url: string; alt?: string }[] = [];
+  for (const item of parsed) {
+    if (images.length >= MAX_IMAGES) break;
+    const record = (item ?? {}) as { url?: unknown; alt?: unknown };
+    const url = typeof item === "string" ? item.trim() : String(record.url ?? "").trim();
+    // 不符白名單的(舊的外部圖床網址)直接丟掉。前台本來就渲染不出來,
+    // ImageUploader 會先標「舊外部圖(儲存後會被移除)」,不是無預警消失。
+    if (!url.startsWith(prefix)) continue;
+    const alt = String(record.alt ?? "").trim().slice(0, MAX_ALT_LENGTH);
+    images.push(alt ? { url, alt } : { url });
+  }
+  return images;
+}
+
 // ---------- 商品 ----------
 export async function upsertProduct(formData: FormData) {
   await requireAdmin();
   const db = createAdminClient();
 
   const id = String(formData.get("id") ?? "");
-  const imagesRaw = String(formData.get("images") ?? "").trim();
-  const images = imagesRaw
-    ? imagesRaw
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((url) => ({ url }))
-    : [];
+  const images = parseImagesField(formData);
 
   // 英文欄位選填,留空一律存 null(渲染端 localizeText 靠 null 判斷「尚未翻譯,fallback 中文」)。
   const nameEnRaw = String(formData.get("name_en") ?? "").trim();
@@ -103,14 +142,7 @@ export async function upsertCourse(formData: FormData) {
   const db = createAdminClient();
 
   const id = String(formData.get("id") ?? "");
-  const imagesRaw = String(formData.get("images") ?? "").trim();
-  const images = imagesRaw
-    ? imagesRaw
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((url) => ({ url }))
-    : [];
+  const images = parseImagesField(formData);
 
   const courseKind = String(formData.get("course_kind")) === "recorded" ? "recorded" : "live";
 

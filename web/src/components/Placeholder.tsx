@@ -20,6 +20,26 @@ export function gradientForId(id: string): [string, string] {
 
 import Image from "next/image";
 
+// next.config.ts 的 images.remotePatterns 只允許 *.supabase.co。DB 裡若殘留舊的外部圖床網址,
+// next/image 不會優雅降級而是直接丟錯,整個區塊變成錯誤佔位。
+// 這裡先做一次純字串判斷(server component,零 client 成本、不必改成 "use client"):
+// 只有站內相對路徑(/scenes/…、/rooms/…)與 Supabase Storage 的網址(public 或 signed)
+// 才交給 <Image>,其餘一律視為「沒有圖」,顯示乾淨的漸層佔位。
+function isRenderableSrc(src: string | null | undefined): src is string {
+  if (!src) return false;
+  if (src.startsWith("/")) return true; // public/ 底下的靜態圖
+  try {
+    const url = new URL(src);
+    return (
+      url.protocol === "https:" &&
+      url.hostname.endsWith(".supabase.co") &&
+      url.pathname.startsWith("/storage/")
+    );
+  } catch {
+    return false; // 不是合法絕對網址
+  }
+}
+
 export default function Placeholder({
   gradient,
   label,
@@ -43,16 +63,18 @@ export default function Placeholder({
     ? `repeating-linear-gradient(135deg, rgba(120,95,70,0.09) 0 1px, transparent 1px 12px), linear-gradient(135deg, ${gradient[0]}, ${gradient[1]})`
     : undefined;
 
+  const imageSrc = isRenderableSrc(src) ? src : null;
+
   return (
     <div
       className={`lm-ph ${className}`}
       // 有真圖時不顯示開發用的佔位標籤
-      data-label={src ? undefined : label}
+      data-label={imageSrc ? undefined : label}
       style={{ backgroundImage, ...style }}
     >
-      {src && (
+      {imageSrc && (
         <Image
-          src={src}
+          src={imageSrc}
           alt={alt ?? label ?? ""}
           fill
           sizes={sizes}
