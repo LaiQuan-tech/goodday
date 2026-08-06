@@ -29,7 +29,13 @@ export async function runFollowupJobs() {
   const supabase = db();
   if (!supabase) return { ok: false, reason: "supabase env missing" };
 
-  const results = { expiredQuotes: 0, quoteReminders: 0, orderReminders: 0, pointsExpired: 0 };
+  const results = {
+    expiredQuotes: 0,
+    quoteReminders: 0,
+    orderReminders: 0,
+    pointsExpired: 0,
+    courseSeatsReleased: 0,
+  };
   const now = new Date();
 
   // 1. 過期報價:已寄出但超過有效期 → expired
@@ -132,6 +138,12 @@ export async function runFollowupJobs() {
     // unique violation(23505)代表已被其他來源(如訂單取消)沖銷過,略過即可(冪等)
     if (!error) results.pointsExpired++;
   }
+
+  // 5. 課程保留位到期回收:付費報名在建單時先佔位(reserved + expires_at),逾期未付款
+  //    由 expire_course_reservations() 轉 cancelled 並把名額還回 course_details.seats_taken。
+  //    名額一律經該 function 異動(內含 FOR UPDATE 列鎖),這裡不自己碰 seats_taken。
+  const { data: releasedSeats } = await supabase.rpc("expire_course_reservations");
+  results.courseSeatsReleased = typeof releasedSeats === "number" ? releasedSeats : 0;
 
   return { ok: true, ...results, ranAt: now.toISOString() };
 }

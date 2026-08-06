@@ -192,8 +192,10 @@ const en: Messages = {
     enrollFullLabel: "Fully Booked",
     enrollClosedLabel: "Enrollment Closed",
     loginToEnroll: "Log In to Enroll",
-    paidComingSoon: "Online Enrollment Coming Soon",
-    paidNote: "This is a paid course — online enrollment is opening soon. Get in touch if you'd like to know more.",
+    enrollPaid: "Enroll & Check Out",
+    enrollingPaid: "Going to checkout…",
+    paidNote:
+      "Enrolling adds this course to your cart and takes you to checkout. Your seat is held until the payment deadline.",
     enrollSuccess: "You're enrolled! We'll email you the class details shortly.",
     errors: {
       notLoggedIn: "Please log in before enrolling",
@@ -319,6 +321,7 @@ const en: Messages = {
     browseCollection: "Browse the Collection",
     removeAriaLabel: "Remove",
     decreaseAriaLabel: "Decrease",
+    courseSingleSeat: "One seat per person",
     increaseAriaLabel: "Increase",
     freeShippingReached: "Free shipping threshold reached ✓",
     freeShippingPrefix: "Spend ",

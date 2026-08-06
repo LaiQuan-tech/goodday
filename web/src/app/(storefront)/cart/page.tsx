@@ -72,24 +72,32 @@ export default function CartPage() {
                     </button>
                   </div>
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center border border-line-2">
-                      <button
-                        aria-label={t.decreaseAriaLabel}
-                        onClick={() => updateQuantity(item.productId, item.mode, item.quantity - 1)}
-                        className="flex h-9 w-9 items-center justify-center text-ink-deep"
-                      >
-                        −
-                      </button>
-                      <span className="w-7 text-center text-sm font-semibold">{item.quantity}</span>
-                      <button
-                        aria-label={t.increaseAriaLabel}
-                        onClick={() => updateQuantity(item.productId, item.mode, item.quantity + 1)}
-                        className="flex h-9 w-9 items-center justify-center text-ink-deep"
-                      >
-                        +
-                      </button>
-                    </div>
-                    <span className="font-serif text-ink">{formatTWD(item.price * item.quantity, locale)}</span>
+                    {/* 課程一人一位,不給數量控制:api/orders 會強制 quantity=1,
+                        留著加減鈕會讓客人在購物車看到兩倍金額、實際只被收一份的錢。 */}
+                    {item.mode === "course" ? (
+                      <span className="text-[13px] text-muted-2">{t.courseSingleSeat}</span>
+                    ) : (
+                      <div className="flex items-center border border-line-2">
+                        <button
+                          aria-label={t.decreaseAriaLabel}
+                          onClick={() => updateQuantity(item.productId, item.mode, item.quantity - 1)}
+                          className="flex h-9 w-9 items-center justify-center text-ink-deep"
+                        >
+                          −
+                        </button>
+                        <span className="w-7 text-center text-sm font-semibold">{item.quantity}</span>
+                        <button
+                          aria-label={t.increaseAriaLabel}
+                          onClick={() => updateQuantity(item.productId, item.mode, item.quantity + 1)}
+                          className="flex h-9 w-9 items-center justify-center text-ink-deep"
+                        >
+                          +
+                        </button>
+                      </div>
+                    )}
+                    <span className="font-serif text-ink">
+                      {formatTWD(item.price * (item.mode === "course" ? 1 : item.quantity), locale)}
+                    </span>
                   </div>
                 </div>
               </div>

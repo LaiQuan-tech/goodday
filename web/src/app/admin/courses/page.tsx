@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createAdminClient } from "@/lib/supabase/admin";
+import CoursePublishToggle from "@/components/admin/CoursePublishToggle";
 import { formatTWD, formatDateTime } from "@/lib/format";
 import type { CourseDetail, Product } from "@/lib/types";
 
@@ -94,10 +95,11 @@ export default async function AdminCoursesPage() {
               <div className="mt-1 text-[13px] text-ink-soft">
                 {formatTWD(c.price)} · 名額 {seatsText(d)}
               </div>
-              <div className="mt-3">
+              <div className="mt-3 flex items-center gap-2">
                 <Link href={`/admin/courses/${c.id}`} className="iv-btn-ghost">
                   編輯
                 </Link>
+                <CoursePublishToggle courseId={c.id} status={c.status} />
               </div>
             </div>
           );
@@ -120,6 +122,7 @@ export default async function AdminCoursesPage() {
               <th className="py-2.5 text-right font-medium">名額</th>
               <th className="py-2.5 text-right font-medium">價格</th>
               <th className="py-2.5 text-right font-medium">狀態</th>
+              <th className="py-2.5 text-right font-medium">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -157,12 +160,15 @@ export default async function AdminCoursesPage() {
                       {STATUS_LABEL[c.status]}
                     </span>
                   </td>
+                  <td className="py-3 text-right">
+                    <CoursePublishToggle courseId={c.id} status={c.status} />
+                  </td>
                 </tr>
               );
             })}
             {courses.length === 0 && (
               <tr>
-                <td colSpan={7} className="py-8 text-center text-ink-soft">
+                <td colSpan={8} className="py-8 text-center text-ink-soft">
                   還沒有課程,點右上角「新增課程」開始建立。
                 </td>
               </tr>

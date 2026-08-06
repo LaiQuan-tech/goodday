@@ -2,6 +2,7 @@ import { revalidatePath } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { emailShell, sendMail, siteUrl } from "@/lib/resend";
 import { grantPointsForOrder, applyMembershipPurchase } from "@/lib/points";
+import { applyCoursePurchase } from "@/lib/courses";
 import type { Locale } from "@/lib/i18n/config";
 import type { Order } from "@/lib/types";
 
@@ -51,6 +52,10 @@ export async function markOrderPaid(
   const updatedOrder = { ...order, ...patch } as Order;
   await grantPointsForOrder(updatedOrder);
   await applyMembershipPurchase(updatedOrder);
+  // 課程:把保留位轉確認 + 開通觀看權。applyCoursePurchase 內部整段包 try/catch 且不 rethrow,
+  // 座位確認失敗(如客人拖過保留期、位子被回收)只會 console.error + notifyAdmin,
+  // 訂單照樣標成 paid、點數照發、信照寄 —— fail-closed 於「開通」,不是於「收款」。
+  await applyCoursePurchase(updatedOrder);
 
   if (order.contact_email) {
     // Phase F2:依訂單買家 locale 分支中英文(取不到就 zh,與現行行為相同)

@@ -176,8 +176,10 @@ const zh = {
     enrollFullLabel: "已報名額滿",
     enrollClosedLabel: "報名已截止",
     loginToEnroll: "登入後報名",
-    paidComingSoon: "即將開放線上報名",
-    paidNote: "這是付費課程，線上報名即將開放。想先了解可以與我們聯繫。",
+    // ---- 階段 3:付費報名接上金流 ----
+    enrollPaid: "報名並結帳",
+    enrollingPaid: "前往結帳…",
+    paidNote: "報名將加入購物車並前往結帳，完成付款後即完成報名；名額會為你保留至繳費期限。",
     enrollSuccess: "報名成功！我們會以 Email 與你聯繫上課資訊。",
     errors: {
       notLoggedIn: "請先登入再報名",
@@ -300,6 +302,7 @@ const zh = {
     browseCollection: "去逛逛典藏",
     removeAriaLabel: "移除",
     decreaseAriaLabel: "減少",
+    courseSingleSeat: "課程一人一位",
     increaseAriaLabel: "增加",
     freeShippingReached: "已達宅配免運門檻 ✓",
     freeShippingPrefix: "再購 ",

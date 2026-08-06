@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import CourseForm from "@/components/admin/CourseForm";
@@ -35,7 +36,17 @@ export default async function AdminCourseEditPage({
 
   return (
     <div className="max-w-2xl">
-      <h2 className="mb-4 font-bold">{product ? `編輯:${product.name}` : "新增課程"}</h2>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-bold break-words">
+          {product ? `編輯:${product.name}` : "新增課程"}
+        </h2>
+        {product && (
+          <Link href={`/admin/courses/${product.id}/enrollments`} className="iv-btn-ghost">
+            報名名單
+            {detail ? `(${detail.seats_taken})` : ""}
+          </Link>
+        )}
+      </div>
       <CourseForm product={product} detail={detail} />
     </div>
   );

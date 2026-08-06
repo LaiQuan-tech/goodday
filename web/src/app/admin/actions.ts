@@ -7,6 +7,7 @@ import { sendQuoteToCustomer, computeTotals } from "@/lib/quote";
 import { getQuoteConfig } from "@/lib/settings";
 import { emailShell, sendMail, siteUrl } from "@/lib/resend";
 import { adjustPoints, refundPointsForOrder } from "@/lib/points";
+import { revokeCourseAccessForOrder } from "@/lib/courses";
 import { markOrderPaid } from "@/lib/orders";
 import type { Locale } from "@/lib/i18n/config";
 import type { Order, QuoteLineItem } from "@/lib/types";
@@ -214,6 +215,25 @@ export async function upsertCourse(formData: FormData) {
   revalidatePath("/products");
 }
 
+// 列表頁的一鍵上架／下架。狀態雖然編輯表單裡也能改,但那是長表單中段的下拉,
+// 實務上找不到;最常用的動作要放在最容易按到的地方。
+export async function setCourseStatus(id: string, status: string) {
+  await requireAdmin();
+  if (!["draft", "active", "archived"].includes(status)) {
+    throw new Error("狀態不正確");
+  }
+  const db = createAdminClient();
+  const { error } = await db
+    .from("products")
+    .update({ status })
+    .eq("id", id)
+    .eq("product_type", "course"); // 防呆:這支只能動課程,不能拿去改一般商品
+  if (error) throw new Error(`操作失敗:${error.message}`);
+  revalidatePath("/admin/courses");
+  revalidatePath("/courses");
+  revalidatePath("/products");
+}
+
 // 軟刪除:只把 products.status 設 archived,course_details 與報名紀錄都保留
 export async function archiveCourse(id: string) {
   await requireAdmin();
@@ -263,10 +283,11 @@ export async function updateOrderStatus(orderId: string, next: string) {
   const { error } = await db.from("orders").update(patch).eq("id", orderId);
   if (error) throw new Error(error.message);
 
-  // 點數:→cancelled 回沖折抵/收回回饋
+  // 點數:→cancelled 回沖折抵/收回回饋;課程:退座位(名額還給其他人)+ 收回觀看權
   const updatedOrder = { ...order, ...patch } as Order;
   if (next === "cancelled") {
     await refundPointsForOrder(updatedOrder);
+    await revokeCourseAccessForOrder(updatedOrder);
   }
 
   // 通知客戶

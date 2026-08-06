@@ -286,6 +286,9 @@ export default async function ProductDetailPage({
                 <CourseEnrollSection
                   productId={product.id}
                   slug={product.slug}
+                  name={product.name}
+                  nameEn={product.name_en}
+                  price={product.price}
                   enrollmentType={courseDetail.enrollment_type}
                   capacity={courseDetail.capacity}
                   seatsTaken={courseDetail.seats_taken}

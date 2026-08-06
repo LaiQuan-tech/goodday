@@ -15,6 +15,7 @@ import {
   SHIPPING_METHOD_LABEL,
 } from "@/lib/format";
 import { getPointsBalance, redeemPointsForOrder } from "@/lib/points";
+import { reserveSeatsForOrder } from "@/lib/courses";
 import { createPayment, isCardPaymentAvailable } from "@/lib/payments";
 import { isLocale, type Locale } from "@/lib/i18n/config";
 import type { InvoiceType, PurchaseMode, ShippingMethod } from "@/lib/types";
@@ -57,7 +58,7 @@ type CheckoutBody = {
   locale?: string;
 };
 
-const VALID_MODES: PurchaseMode[] = ["buyout", "rental", "journey", "membership"];
+const VALID_MODES: PurchaseMode[] = ["buyout", "rental", "journey", "membership", "course"];
 
 // 依商品的 product_type 決定允許的購買模式與預設模式
 function resolveMode(productType: string, requested?: PurchaseMode): PurchaseMode | null {
@@ -67,6 +68,7 @@ function resolveMode(productType: string, requested?: PurchaseMode): PurchaseMod
   }
   if (productType === "journey") return "journey";
   if (productType === "membership") return "membership";
+  if (productType === "course") return "course";
   return null;
 }
 
@@ -152,8 +154,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `「${p.name}」不支援此購買模式` }, { status: 400 });
     }
 
-    // 會員方案一次只能買一份(非計量商品)
-    const quantity = mode === "membership" ? 1 : item.quantity;
+    // 會員方案與課程一次只能買一份(非計量商品):課程報名是「一個人一個座位」,
+    // 名額由 reserve_course_seat() 以「一筆報名 = 一位」控管,買 2 份也只會佔 1 位。
+    const quantity = mode === "membership" || mode === "course" ? 1 : item.quantity;
 
     let unitPrice: number;
     if (mode === "rental") {
@@ -165,7 +168,9 @@ export async function POST(req: NextRequest) {
       unitPrice = p.price;
     }
 
-    // 庫存只對實體藝術品(買斷/月租)有意義;旅程與會員方案是服務類商品,不受庫存限制
+    // 庫存只對實體藝術品(買斷/月租)有意義;旅程、會員方案與課程是服務類商品,不受庫存限制。
+    // ⚠️ 課程的 products.stock 恆為 0,若讓它走進這個 if 會一律被擋成「庫存不足」;
+    // 課程的容量限制走 course_details.capacity + reserve_course_seat(),與 stock 無關。
     if (p.product_type === "artwork") {
       if (p.stock < quantity) {
         return NextResponse.json(
@@ -275,6 +280,13 @@ export async function POST(req: NextRequest) {
     /* 未登入照樣可下單 */
   }
 
+  // 課程品項必須綁帳號:course_access(觀看權)與 course_enrollments 都以 user_id 為主鍵之一,
+  // 訪客購課會付了錢卻拿不到觀看權、也無從歸戶,所以在建單之前就擋掉。
+  const courseLines = lineItems.filter((i) => i.purchase_mode === "course");
+  if (courseLines.length > 0 && !userId) {
+    return NextResponse.json({ error: "購買課程請先登入會員" }, { status: 400 });
+  }
+
   // 點數折抵(1 點 = NT$1,僅登入會員可用,上限為 min(餘額, 商品小計))
   const requestedPoints = Number(body.pointsUsed ?? 0);
   let pointsUsed = 0;
@@ -364,6 +376,36 @@ export async function POST(req: NextRequest) {
     console.error("[orders] items insert failed:", itemsErr);
     await supabase.from("orders").delete().eq("id", order.id);
     return NextResponse.json({ error: "訂單建立失敗" }, { status: 500 });
+  }
+
+  // 課程佔位(reserved,付款後才轉 confirmed)。
+  //
+  // ⚠️⚠️ 這一段的位置是這支 route 最重要的事,改動前請先讀完:
+  //   1. 必須在 order_items 建立「之後」—— 佔位紀錄要帶 order_id 才能在付款/取消時對得回來。
+  //   2. 必須在 redeemPointsForOrder()「之前」—— 扣點數會寫進 points_ledger,若先扣點再
+  //      發現額滿,就得回滾點數帳本(而 ledger 是不可變的帳,回滾要再寫一筆沖銷);
+  //      排在前面則額滿的失敗路徑完全不用碰點數。
+  //   3. 也必須在扣庫存之前(同理:失敗路徑不用把庫存加回去)。
+  //   4. 全有或全無:多堂課只要有一堂搶不到位,整張訂單失敗,已搶到的位子由
+  //      reserveSeatsForOrder() 內部呼叫 release_course_seats_for_order() 釋放,不留孤兒保留。
+  if (courseLines.length > 0 && userId) {
+    const reserveResult = await reserveSeatsForOrder(
+      {
+        id: order.id,
+        user_id: userId,
+        contact_name: order.contact_name,
+        contact_email: order.contact_email,
+        contact_phone: order.contact_phone,
+      },
+      courseLines.map((i) => ({ product_id: i.product_id, name: i.name }))
+    );
+    if (!reserveResult.ok) {
+      // 位子沒搶到就不該留下這張訂單(否則客人會看到一張永遠付不成的單,
+      // 且 idempotency_key 會被佔住導致重試拿到同一張壞單)
+      await supabase.from("order_items").delete().eq("order_id", order.id);
+      await supabase.from("orders").delete().eq("id", order.id);
+      return NextResponse.json({ error: reserveResult.error }, { status: 409 });
+    }
   }
 
   // 扣點數(server 端已驗證餘額;冪等靠 points_ledger unique index)
