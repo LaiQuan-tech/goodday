@@ -228,12 +228,17 @@ export default async function CourseLandingPage({
           遮罩比 journeys 的兩段式多一段:那裡疊層只有一行 H1,這裡要疊
           類型 chip + 標題 + 副標 + 日期地點 + CTA,頂部也得壓暗才讀得到。
           沒有主視覺時底色是偏米白的漸層,要壓更暗才有足夠對比。
+
+          ⚠️ 用明確停點而不是 from/via/to:Tailwind 的 via 固定落在 50%,而文字大約
+          佔據 hero 的 42%~90%,標題頂端剛好落在最淡的那一段。實測高彩度插畫
+          (JSJ 體驗講座那張)在 40% 暗度下完全讀不到。這裡把暗度在 62% 處就拉到
+          82%,上緣仍保持通透讓主視覺看得出來。
         */}
         <div
-          className={`absolute inset-0 flex flex-col justify-end bg-gradient-to-b px-6 py-10 sm:px-16 sm:py-15 ${
+          className={`absolute inset-0 flex flex-col justify-end px-6 py-10 sm:px-16 sm:py-15 ${
             heroSrc
-              ? "from-ink-deep/50 via-ink-deep/40 to-ink-deep/88"
-              : "from-ink-deep/55 via-ink-deep/45 to-ink-deep/85"
+              ? "bg-[linear-gradient(to_bottom,rgba(46,37,25,0.28)_0%,rgba(46,37,25,0.42)_28%,rgba(46,37,25,0.82)_62%,rgba(46,37,25,0.93)_100%)]"
+              : "bg-[linear-gradient(to_bottom,rgba(46,37,25,0.45)_0%,rgba(46,37,25,0.60)_35%,rgba(46,37,25,0.85)_70%,rgba(46,37,25,0.93)_100%)]"
           }`}
         >
           <div className="lm-container !px-0">
