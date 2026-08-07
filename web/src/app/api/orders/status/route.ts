@@ -15,8 +15,8 @@ const PAID_LIKE = new Set(["paid", "processing", "shipped", "completed"]);
  * status 值:
  *   "paid"      — orders.status 已是 paid 或更後面(processing/shipped/completed)
  *   "cancelled" — 訂單已被取消(理論上不會在 card 結帳流程中發生,防禦性處理)
- *   "failed"    — webhook 反查權威結果 status/statusCode="F",但訂單仍是 pending
- *   "pending"   — 其餘情況(含 PChomePay 反查狀態 "W" 等待中、尚未收到任何 webhook)
+ *   "failed"    — webhook 反查權威結果 TradeStatus="2"(付款失敗)/"3"(付款取消),但訂單仍是 pending
+ *   "pending"   — 其餘情況(含 PayUni 反查狀態 "0" 取號成功 /"8" 待確認、尚未收到任何 webhook)
  */
 export async function GET(req: NextRequest) {
   const orderNo = req.nextUrl.searchParams.get("no")?.trim().slice(0, 40);
@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
     const { data: failedMarker } = await supabase
       .from("webhook_events")
       .select("event_key")
-      .eq("gateway", "pchomepay")
+      .eq("gateway", "payuni")
       .eq("event_key", `failed_${orderNo}`)
       .maybeSingle();
     status = failedMarker ? "failed" : "pending";

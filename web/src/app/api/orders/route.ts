@@ -16,7 +16,7 @@ import {
 } from "@/lib/format";
 import { getPointsBalance, redeemPointsForOrder } from "@/lib/points";
 import { reserveSeatsForOrder } from "@/lib/courses";
-import { createPayment, isCardPaymentAvailable } from "@/lib/payments";
+import { createPayment, isCardPaymentAvailable, type PaymentResult } from "@/lib/payments";
 import { isLocale, type Locale } from "@/lib/i18n/config";
 import type { InvoiceType, PurchaseMode, ShippingMethod } from "@/lib/types";
 
@@ -351,16 +351,16 @@ export async function POST(req: NextRequest) {
 
   // card 訂單建單當下就寫入 gateway_tx_id(= order.order_no,DB insert 剛產生,每次結帳
   // 都是新值,unique index 不衝突),且必須早於下面呼叫 createPayment() —— createPayment()
-  // 一旦成功,PChomePay 就已經知道這個 order_no、隨時可能打 webhook 回來;若寫入動作
-  // 留到 createPayment() 之後才做(舊版做法,且未檢查回傳結果),中間這段空窗期若
-  // webhook 先到,會因為查不到 gateway_tx_id 而被直接 ack 放掉、永遠不會再重送。
-  // 這裡改成先寫、檢查寫入結果;寫入失敗就不呼叫 createPayment()(不讓一筆金流訂單
-  // 存在於 PChomePay 卻對不到我們 DB 的紀錄)。
+  // 一旦成功,客戶的瀏覽器隨時可能把表單 POST 到 PayUni、PayUni 隨時可能打 webhook
+  // 回來;若寫入動作留到 createPayment() 之後才做(舊版做法,且未檢查回傳結果),中間
+  // 這段空窗期若 webhook 先到,會因為查不到 gateway_tx_id 而被直接 ack 放掉、永遠不會
+  // 再重送。這裡改成先寫、檢查寫入結果;寫入失敗就不呼叫 createPayment()(不讓一筆金流
+  // 訂單存在於 PayUni 卻對不到我們 DB 的紀錄)。
   let cardGatewayReady = false;
   if (paymentMethod === "card") {
     const { error: gatewayErr } = await supabase
       .from("orders")
-      .update({ gateway: "pchomepay", gateway_tx_id: order.order_no })
+      .update({ gateway: "payuni", gateway_tx_id: order.order_no })
       .eq("id", order.id);
     if (gatewayErr) {
       console.error("[orders] gateway_tx_id write failed:", gatewayErr);
@@ -428,10 +428,10 @@ export async function POST(req: NextRequest) {
   }
 
   // bank_transfer/cod 一律回 null,走現行「站內顯示匯款資訊」流程;
-  // card 呼叫 PChomePay 建立付款,取得 redirectUrl 供前端轉導至收銀台 —— 但只在上面
-  // gateway_tx_id 已確實寫入(cardGatewayReady)時才呼叫,避免建立一筆 webhook 永遠對
-  // 不到單的金流 session。
-  let paymentResult: { redirectUrl: string } | null = null;
+  // card 組出 PayUni 整合式支付頁(UPP)的 Form POST 內容({ action, fields }),由前端
+  // 動態建 form 送出 —— 但只在上面 gateway_tx_id 已確實寫入(cardGatewayReady)時才做,
+  // 避免產生一筆 webhook 永遠對不到單的金流交易。
+  let paymentResult: PaymentResult | null = null;
   if (paymentMethod !== "card" || cardGatewayReady) {
     try {
       paymentResult = await createPayment(paymentMethod, {
@@ -536,8 +536,12 @@ export async function POST(req: NextRequest) {
     )
   );
 
+  // card:回傳 PayUni 支付頁的 Form POST 內容,前端動態建 form 並 submit
+  // (PayUni 沒有可以直接 location.href 的 redirect URL)。
   return NextResponse.json({
     orderToken: order.public_token,
-    ...(paymentResult ? { redirectUrl: paymentResult.redirectUrl } : {}),
+    ...(paymentResult
+      ? { payment: { action: paymentResult.action, fields: paymentResult.fields } }
+      : {}),
   });
 }

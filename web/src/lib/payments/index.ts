@@ -1,5 +1,5 @@
 // 付款供應商介面:銀行轉帳/貨到付款走現行流程(createPayment 回 null,不轉導);
-// 信用卡/ATM/超商代碼由 PChomePay 支付連處理(見 ./pchomepay.ts)。
+// 信用卡由 PayUni 統一金流處理(見 ./payuni.ts)。
 export type PaymentOrder = {
   id: string;
   order_no: string;
@@ -7,20 +7,34 @@ export type PaymentOrder = {
   contact_name: string;
   contact_email: string;
   public_token: string;
-  /** 顯示在 PChomePay 收銀台的品項名稱;未提供時退化為「好日子訂單 ${order_no}」 */
+  /** 顯示在 PayUni 支付頁的品項名稱;未提供時退化為「好日子訂單 ${order_no}」 */
   itemName?: string;
 };
 
-export type PaymentResult = { redirectUrl: string };
+/**
+ * PayUni 的整合式支付頁(UPP)是「由瀏覽器 Form POST 四個欄位過去」才成立交易,
+ * 沒有「伺服器端先建立交易、換一個 redirect URL」的流程(這點與本站舊金流商相反)。
+ * 因此這裡回傳的是表單內容,由前端動態建 form 送出,而不是一個可以直接 location.href 的網址。
+ */
+export type PaymentResult = {
+  kind: "form";
+  action: string;
+  fields: Record<string, string>;
+};
 
-// 刷卡選項是否可用:APP_ID/SECRET 之外,WEBHOOK_SECRET 也必須設定才算可用。
-// 少了 WEBHOOK_SECRET,客戶會被收款成功、但 webhook 因驗不到密鑰一律 503,訂單永遠卡 pending
-// (錢進金流商、點數/確認信全不發)——寧可整個不開放刷卡,也不要開放一個會卡單的刷卡。
+// 刷卡選項是否可用:除了 PayUni 的三把金鑰(MER_ID/HASH_KEY/HASH_IV)之外,
+// WEBHOOK_SECRET 也必須設定才算可用。
+//
+// ⚠️ 這一條是刻意沿用舊金流時期的安全設計,不要為了「規格只寫三個變數」而拿掉:
+// 少了 WEBHOOK_SECRET,payuniNotifyUrl() 會回 null → 建立交易時根本不會帶 NotifyURL
+// → 客戶被真的收款成功,但我們永遠收不到付款通知,訂單卡在 pending(點數/會員升級/
+// 確認信全不發,錢已經進金流商)。寧可整個不開放刷卡,也不要開放一個會卡單的刷卡。
 export function isCardPaymentAvailable(): boolean {
   return Boolean(
-    process.env.PCHOMEPAY_APP_ID &&
-      process.env.PCHOMEPAY_SECRET &&
-      process.env.PCHOMEPAY_WEBHOOK_SECRET
+    process.env.PAYUNI_MER_ID &&
+      process.env.PAYUNI_HASH_KEY &&
+      process.env.PAYUNI_HASH_IV &&
+      process.env.PAYUNI_WEBHOOK_SECRET
   );
 }
 
@@ -33,19 +47,15 @@ export async function createPayment(
   if (paymentMethod !== "card") return null;
   if (!isCardPaymentAvailable()) return null;
 
-  const { createPchomePayment, pchomepayReturnUrl } = await import("./pchomepay");
-  const { siteUrl } = await import("@/lib/resend");
+  const { buildUppForm } = await import("./payuni");
 
-  const { paymentUrl } = await createPchomePayment({
-    orderNo: order.order_no,
+  // MerTradeNo 直接用 order_no(格式 IV-2026-00001):≤25 碼、字元集符合 PayUni 規則、
+  // 全站唯一,且與建單時寫入的 gateway_tx_id 完全一致 —— webhook 才對得回這筆訂單。
+  const { action, fields } = buildUppForm({
+    merTradeNo: order.order_no,
     amount: order.total,
-    buyerEmail: order.contact_email,
-    itemName: order.itemName ?? `好日子訂單 ${order.order_no}`,
-    returnUrl: pchomepayReturnUrl(order.order_no),
-    // notify_url 帶上伺服器產生的密鑰(?k=),webhook route 進任何業務邏輯前先驗證這把
-    // 密鑰 —— 沒有它,任何人都能對 webhook 端點偽造 order_paid 通知(見該檔開頭註解)。
-    // 2026-07-19 沙盒實測:PChomePay 接受帶 query string 的 notify_url。
-    notifyUrl: `${siteUrl()}/api/webhooks/pchomepay?k=${process.env.PCHOMEPAY_WEBHOOK_SECRET ?? ""}`,
+    prodDesc: order.itemName ?? `好日子訂單 ${order.order_no}`,
   });
-  return { redirectUrl: paymentUrl };
+
+  return { kind: "form", action, fields };
 }

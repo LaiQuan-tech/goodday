@@ -8,7 +8,7 @@ import type { Order } from "@/lib/types";
 
 /**
  * 訂單標記為已付款的共用邏輯 —— 後台「標記已付款」(admin/actions.ts)與
- * PChomePay webhook 都呼叫這支,確保點數核發/會員升級/付款確認信只有一套邏輯。
+ * PayUni webhook 都呼叫這支,確保點數核發/會員升級/付款確認信只有一套邏輯。
  *
  * 冪等:訂單已是 paid 或更後面的狀態(processing/shipped/completed)就直接視為成功跳過,
  * 不重複核發點數。用條件式 update(.eq("status","pending"))做 CAS,防止並發下(webhook

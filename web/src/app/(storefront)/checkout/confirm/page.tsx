@@ -6,15 +6,15 @@ import { clearCart } from "@/lib/cart";
 import { useTranslations } from "@/lib/i18n/context";
 import { localeHref } from "@/lib/i18n/href";
 
-// PChomePay 導回頁(return_url)。PChomePay 導回時不帶任何參數,所以 return_url 本身在
-// 建立付款時就已經附上 ?order=<order_no>(見 lib/payments/pchomepay.ts pchomepayReturnUrl)。
+// PayUni 前景導回頁(ReturnURL)。導回時帶什麼參數不保證,所以 ReturnURL 本身在
+// 建立交易時就已經附上 ?order=<order_no>(見 lib/payments/payuni.ts payuniReturnUrl)。
 //
-// 信 DB 不信 URL:不管 PChomePay 導回時帶了什麼(或什麼都沒帶),一律以
+// 信 DB 不信 URL:不管 PayUni 導回時帶了什麼(或什麼都沒帶),一律以
 // GET /api/orders/status 的輪詢結果為準,不用 URL query string 判斷付款是否成功。
 //
 // 狀態對應刻意保守:只有明確拿到 "paid" 才算成功、明確拿到 "failed"/"cancelled" 才算失敗,
-// 其餘一切(包含 PChomePay 反查的 "W" 等待中、網路錯誤、未知值)一律當作還在確認中繼續輪詢,
-// 避免把「還沒有結果」誤判成「失敗」。
+// 其餘一切(包含 PayUni 反查的 "0" 取號成功 /"8" 待確認、網路錯誤、未知值)一律當作還在
+// 確認中繼續輪詢,避免把「還沒有結果」誤判成「失敗」。
 //
 // 這頁不再 fetch 或使用 public_token —— /api/orders/status 只回 { status },不回任何
 // 可用來查看訂單詳情的憑證(避免靠猜 order_no 冒領訂單頁,見該 route 的註解)。訂單

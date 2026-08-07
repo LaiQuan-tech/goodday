@@ -207,8 +207,27 @@ export default function CheckoutForm({
       if (!res.ok || !data.orderToken) {
         throw new Error(data.error ?? t.orderCreateFailed);
       }
-      if (data.redirectUrl) {
-        window.location.href = data.redirectUrl;
+      // PayUni 整合式支付頁(UPP)只吃「瀏覽器 Form POST」,沒有可以直接
+      // location.href 過去的 redirect URL —— 所以動態建一個 hidden form 送出。
+      // 購物車刻意不在這裡清空:等 checkout/confirm 頁輪詢到 paid 才清,
+      // 客人中途放棄付款時購物車還在。
+      const payment = data.payment as
+        | { action?: string; fields?: Record<string, string> }
+        | undefined;
+      if (payment?.action && payment.fields) {
+        const f = document.createElement("form");
+        f.method = "POST";
+        f.action = payment.action;
+        f.style.display = "none";
+        for (const [name, value] of Object.entries(payment.fields)) {
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.name = name;
+          input.value = value;
+          f.appendChild(input);
+        }
+        document.body.appendChild(f);
+        f.submit();
         return;
       }
       clearCart();

@@ -393,7 +393,7 @@ export async function updateOrderStatus(orderId: string, next: string) {
     throw new Error(`不允許從 ${order.status} 變更為 ${next}`);
   }
 
-  // →paid:委派給 markOrderPaid(與 PChomePay webhook 共用同一套「核發點數 + 會員升級 +
+  // →paid:委派給 markOrderPaid(與 PayUni webhook 共用同一套「核發點數 + 會員升級 +
   // 付款確認信 + 冪等」邏輯,不在這裡重複實作)。
   if (next === "paid") {
     const result = await markOrderPaid(orderId);
