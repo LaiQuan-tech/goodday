@@ -54,7 +54,7 @@ function secretMatches(provided: string | null, expected: string): boolean {
  *   - webhook_events 表只用來存 `failed_<order_no>` marker,供 /api/orders/status
  *     判斷「確認中」還是「付款失敗」;不再用它做預佔式去重。
  *
- * interval 的 orders 表沒有獨立的 payments 表也沒有 payment_status 欄位(訂單生命週期
+ * 本專案的 orders 表沒有獨立的 payments 表也沒有 payment_status 欄位(訂單生命週期
  * 就是 orders.status 本身,pending/paid/processing/shipped/completed/cancelled,不含
  * "failed")。因此:
  *   - isPaid:直接對 orders 做條件式更新(經由 markOrderPaid,CAS + 冪等)。
@@ -186,7 +186,7 @@ export async function POST(req: Request) {
     }
   } else if (isFailed) {
     // 已付款訂單不會被這裡動到(上面 TERMINAL_STATUSES 已經短路)。這裡完全不碰
-    // orders.status(interval 的訂單狀態機沒有 failed,寫了會違反 CHECK constraint),
+    // orders.status(本專案的訂單狀態機沒有 failed,寫了會違反 CHECK constraint),
     // 只留一個正規化 marker 給 /api/orders/status 判斷「確認中」還是「付款失敗」。
     if (order.status !== "paid") {
       const { error: markErr } = await supabase

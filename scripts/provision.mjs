@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * interval 一鍵佈建腳本
+ * 好日子 Good Days 一鍵佈建腳本
  *
  * 用你的平台 token 自動完成:
  *   1. Supabase:建立專案 → 跑 migrations → 關閉 email 確認 → 建立管理員帳號
@@ -40,8 +40,8 @@ const ENV = {
   ADMIN_EMAIL: process.env.ADMIN_EMAIL ?? "",
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD ?? "",
   SUPABASE_ORG_ID: process.env.SUPABASE_ORG_ID ?? "",
-  GITHUB_REPO: process.env.GITHUB_REPO ?? "LaiQuan-tech/interval",
-  PROJECT_NAME: process.env.PROJECT_NAME ?? "interval",
+  GITHUB_REPO: process.env.GITHUB_REPO ?? "LaiQuan-tech/goodday",
+  PROJECT_NAME: process.env.PROJECT_NAME ?? "goodday",
   SUPABASE_REGION: process.env.SUPABASE_REGION ?? "ap-northeast-1",
 };
 
@@ -460,7 +460,7 @@ async function checkResend() {
 
 // ================= main =================
 async function main() {
-  console.log("\n=== interval 一鍵佈建 ===\n");
+  console.log("\n=== 好日子 Good Days 一鍵佈建 ===\n");
 
   const missing = ["SUPABASE_ACCESS_TOKEN", "VERCEL_TOKEN", "RAILWAY_TOKEN"].filter(
     (k) => !ENV[k]

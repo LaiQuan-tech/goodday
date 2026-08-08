@@ -1,7 +1,7 @@
 {
-  "name": "interval",
+  "name": "goodday",
   "private": true,
-  "description": "interval — 賣到全世界:跨境電商官網 + 會員系統 + 電商後台 + AI 自動報價",
+  "description": "好日子 Good Days — 賣到全世界:跨境電商官網 + 會員系統 + 電商後台 + AI 自動報價",
   "scripts": {
     "dev": "npm run dev --workspace=web",
     "dev:api": "npm run dev --workspace=api",
