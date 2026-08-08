@@ -240,7 +240,7 @@ async function provisionVercel(sb) {
     }
   }
 
-  // 專案名可能已被其他帳號佔用,Vercel 會另配網域(如 interval-livid.vercel.app)——
+  // 專案名可能已被其他帳號佔用,Vercel 會另配網域(如 goodday-tw.vercel.app)——
   // 一律以 API 回傳的實際網域為準,不可用專案名推測
   let prodUrl = `https://${ENV.PROJECT_NAME}.vercel.app`;
   const domainsRes = await api(`${VC}/v9/projects/${project.id}/domains`, { headers: vcHeaders() });
