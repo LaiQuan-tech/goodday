@@ -13,6 +13,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import * as Sentry from "@sentry/node";
 import { getSchedulerState, runScheduledJobs, startScheduler, INTERVAL_MS } from "./scheduler.js";
+import { sendAlert } from "./lib/alert.js";
 
 const app = new Hono();
 
@@ -22,7 +23,14 @@ app.onError((err, c) => {
   console.error("[api] unhandled error:", err);
   Sentry.captureException(err, {
     level: "error",
-    tags: { source: "hono" },
+    // alert:"skip" + 自己呼叫 sendAlert:這樣沒設定 SENTRY_DSN 時告警信一樣寄得出去,
+    // 告警通道不綁在 Sentry 上。(sendAlert 自帶去重與節流,熱路徑不會洗信箱。)
+    tags: { source: "hono", alert: "skip" },
+    extra: { path: c.req.path, method: c.req.method },
+  });
+  void sendAlert("API 未捕捉例外", err instanceof Error ? err.message : String(err), {
+    level: "error",
+    source: "hono",
     extra: { path: c.req.path, method: c.req.method },
   });
   return c.json({ error: "internal server error" }, 500);

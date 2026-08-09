@@ -18,7 +18,7 @@
 //       給外部監控(或人工)直接查。
 import * as Sentry from "@sentry/node";
 import { runFollowupJobs, type FollowupJobsResult } from "./jobs.js";
-import { sendAlert } from "./lib/line-notify.js";
+import { sendAlert } from "./lib/alert.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -169,12 +169,31 @@ export async function runScheduledJobs(
     // 彙總事件,讓「整輪失敗」本身也是一個可以設警報的 issue。
     Sentry.captureMessage(`排程整輪失敗(連續 ${state.consecutiveFailures} 次):${lastFailure}`, {
       level: "error",
-      tags: { job: "followup", trigger },
+      tags: { job: "followup", trigger, alert: "skip" },
       extra: { steps: result?.steps, consecutiveFailures: state.consecutiveFailures },
     });
+    // 一次事故一封信:把每支失敗 step 的錯誤訊息都列進去,收信人不用開 Sentry
+    // 就能判斷嚴重度(例如 pointsExpired 失敗 = 會計問題,要立刻處理)。
+    const failedDetail = (result?.steps ?? [])
+      .filter((s) => !s.ok)
+      .map((s) => `• ${s.name}:${s.error ?? "unknown"}`)
+      .join("\n");
     await sendAlert(
-      "goodday 排程失敗",
-      `${attempts} 次嘗試都失敗(連續第 ${state.consecutiveFailures} 輪)\n${lastFailure}`
+      "排程失敗",
+      `${attempts} 次嘗試都失敗(連續第 ${state.consecutiveFailures} 輪)\n` +
+        // 有逐支明細就只列明細(lastFailure 本身只是 step 名單,會重複)
+        (failedDetail ? `失敗的 step:\n${failedDetail}` : lastFailure),
+      {
+        level: "error",
+        source: "scheduler",
+        step: result?.failedSteps.join(", ") || undefined,
+        extra: {
+          trigger,
+          attempts,
+          consecutiveFailures: state.consecutiveFailures,
+          lastSuccessAt: state.lastSuccessAt ?? "從未成功",
+        },
+      }
     );
     return result ?? { ok: false, reason: lastFailure };
   } catch (err) {
@@ -183,8 +202,15 @@ export async function runScheduledJobs(
     state.lastError = message;
     state.consecutiveFailures++;
     Sentry.captureCheckIn({ checkInId, monitorSlug: MONITOR_SLUG, status: "error" });
-    Sentry.captureException(err, { level: "fatal", tags: { job: "followup", trigger } });
-    await sendAlert("goodday 排程器未預期例外", message);
+    Sentry.captureException(err, {
+      level: "fatal",
+      tags: { job: "followup", trigger, alert: "skip" },
+    });
+    await sendAlert("排程器未預期例外", message, {
+      level: "fatal",
+      source: "scheduler",
+      extra: { trigger, consecutiveFailures: state.consecutiveFailures },
+    });
     return { ok: false, reason: message };
   } finally {
     state.running = false;
@@ -209,10 +235,19 @@ function checkStaleness(): void {
   console.error(`[scheduler] STALE — ${detail}`);
   Sentry.captureMessage(`排程超過 ${minutes} 分鐘沒有成功跑完(疑似漏跑)`, {
     level: "error",
-    tags: { job: "followup", reason: "stale" },
+    tags: { job: "followup", reason: "stale", alert: "skip" },
     extra: getSchedulerState(),
   });
-  void sendAlert("goodday 排程疑似漏跑", detail);
+  void sendAlert("排程疑似漏跑", detail, {
+    level: "error",
+    source: "scheduler/watchdog",
+    extra: {
+      staleForMinutes: minutes,
+      totalRuns: state.totalRuns,
+      consecutiveFailures: state.consecutiveFailures,
+      lastSuccessAt: state.lastSuccessAt ?? "從未成功",
+    },
+  });
 }
 
 let intervalHandle: ReturnType<typeof setInterval> | null = null;

@@ -82,7 +82,9 @@ async function runStep(name: string, fn: () => Promise<number>): Promise<JobStep
     console.error(`[jobs] step "${name}" failed:`, err);
     Sentry.captureException(err, {
       level: "error",
-      tags: { job: "followup", step: name },
+      // alert:"skip" —— 這則不單獨寄信;scheduler 會在整輪結束後寄一封
+      // 列出所有失敗 step 的彙總告警信,避免 5 支 step 噴 5 封。
+      tags: { job: "followup", step: name, alert: "skip" },
     });
     return { name, ok: false, count: 0, error: message };
   }
