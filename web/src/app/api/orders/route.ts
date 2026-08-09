@@ -408,23 +408,51 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // 扣庫存(僅實體藝術品)。
+  //
+  // ⚠️ 位置與上面搶位那段同一套規約,理由完全一樣:
+  //   - 在搶位「之後」:兩者都會失敗,先做便宜的、後做要補償的;搶位失敗時庫存還沒動。
+  //   - 在 redeemPointsForOrder()「之前」:扣庫存失敗要刪單,若點數已扣就得沖銷
+  //     points_ledger(不可變帳本,回滾要再寫一筆),排在前面則完全不用碰點數。
+  //
+  // 舊實作是讀快照 → 數百行後寫絕對值,且 update 的回傳值沒接沒檢查,扣不到也照樣
+  // 導去金流,是靜默超賣的來源。改呼叫 deduct_product_stock():單一交易內排序後
+  // FOR UPDATE 鎖列、相對扣減,任一項不足就整批 RAISE EXCEPTION 回滾。
+  const stockItems = lineItems
+    .filter((line) => productMap.get(line.product_id)!.product_type === "artwork")
+    .map((line) => ({ product_id: line.product_id, quantity: line.quantity }));
+  if (stockItems.length > 0) {
+    const { error: stockError } = await supabase.rpc("deduct_product_stock", {
+      p_items: stockItems,
+    });
+    if (stockError) {
+      console.error("[orders] deduct_product_stock failed:", stockError);
+      // 刪單前必須先退位:course_enrollments.order_id 的 FK 是 on delete set null,
+      // 先刪訂單會把 order_id 抹成 null,release_course_seats_for_order() 就再也
+      // 找不到這些保留,seats_taken 永遠回不來(名額被一張不存在的訂單卡死)。
+      if (courseLines.length > 0 && userId) {
+        const { error: releaseError } = await supabase.rpc("release_course_seats_for_order", {
+          p_order_id: order.id,
+        });
+        if (releaseError) {
+          console.error("[orders] release seats after stock failure failed:", releaseError);
+        }
+      }
+      await supabase.from("order_items").delete().eq("order_id", order.id);
+      await supabase.from("orders").delete().eq("id", order.id);
+      return NextResponse.json(
+        { error: "部分商品庫存不足,請重新整理購物車後再試一次" },
+        { status: 409 }
+      );
+    }
+  }
+
   // 扣點數(server 端已驗證餘額;冪等靠 points_ledger unique index)
   if (pointsUsed > 0 && userId) {
     const redeemResult = await redeemPointsForOrder(userId, order.id, pointsUsed);
     if (!redeemResult.ok) {
       console.error("[orders] points redeem failed after order created:", redeemResult.error);
     }
-  }
-
-  // 扣庫存(僅實體藝術品;簡化版:逐筆條件更新)
-  for (const line of lineItems) {
-    const p = productMap.get(line.product_id)!;
-    if (p.product_type !== "artwork") continue;
-    await supabase
-      .from("products")
-      .update({ stock: p.stock - line.quantity })
-      .eq("id", p.id)
-      .gte("stock", line.quantity);
   }
 
   // bank_transfer/cod 一律回 null,走現行「站內顯示匯款資訊」流程;
