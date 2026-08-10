@@ -25,6 +25,40 @@ jobs:
       - name: Typecheck (web + api)
         run: npm run typecheck --workspaces --if-present
 
+      # ── 測試閘門(blocking)────────────────────────────────────────────────
+      # 刻意「沒有」continue-on-error、也「沒有」任何 if 條件:這一步一紅,整個 job
+      # 就紅。涵蓋 web/tests/ 底下的訂單建立流程迴歸測試(POST /api/orders 的副作用
+      # 順序規約:扣庫存先於扣點數、退位先於刪單、扣庫存走 RPC 且檢查 error)。
+      #
+      # 外部相依:不需要。測試全是 hermetic 的 —— supabase / resend / 金流 / 點數 /
+      # 課程模組一律 vi.mock 假掉,假 env 寫在 web/vitest.config.ts,CI 不需要 DB、
+      # Redis 或任何 service container。
+      #
+      # ⚠️ 這個閘門擋不到的東西:Vercel 走自己的 GitHub 整合部署,不等 Actions 綠,
+      # 所以這裡的紅燈無法阻止 Vercel 上線新版本 —— 它是「事後告警」而非「事前閘門」。
+      - name: Test (web)
+        run: npm run test --workspace=web -- --reporter=verbose --reporter=json --outputFile.json=vitest-report.json
+
+      # vitest 對「沒對到任何檔案的 glob」不會報錯,exit code 照樣 0 —— 測試檔可以
+      # 被 include 設定靜默跳過而沒有人發現(Realreal 的 apps/api 就這樣漏掉 4 支檔
+      # 共 65 個 case)。這一步把「磁碟上有幾支」與「vitest 真的跑了幾支」對起來,
+      # 對不上就讓 CI 紅。
+      - name: 確認測試檔沒有被 include glob 靜默跳過
+        working-directory: web
+        run: |
+          ON_DISK=$(find tests src -name '*.test.ts' 2>/dev/null | wc -l | tr -d ' ')
+          RAN=$(node -e "const r=require('./vitest-report.json');console.log(new Set(r.testResults.map(t=>t.name)).size)")
+          CASES=$(node -e "const r=require('./vitest-report.json');console.log(r.numTotalTests)")
+          echo "磁碟上的測試檔: ${ON_DISK} / vitest 實際跑到: ${RAN} / 測試 case 數: ${CASES}"
+          if [ "$ON_DISK" != "$RAN" ]; then
+            echo "::error::有測試檔沒被跑到(磁碟 ${ON_DISK} vs 實跑 ${RAN})。請檢查 web/vitest.config.ts 的 include glob。"
+            exit 1
+          fi
+          if [ "$ON_DISK" -eq 0 ]; then
+            echo "::error::一支測試檔都沒有,測試閘門形同虛設。"
+            exit 1
+          fi
+
       - name: Build web
         run: npm run build --workspace=web
         env:

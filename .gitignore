@@ -19,6 +19,8 @@ dist/
 .vercel
 .railway
 coverage/
+# vitest 的 JSON 報告(CI 用它比對「磁碟上的測試檔數」與「實際跑到的檔數」)
+vitest-report.json
 
 # 本機 dev server 設定(各人 port 不同,不進版控)
 .claude/
