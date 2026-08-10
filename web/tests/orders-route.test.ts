@@ -30,8 +30,26 @@ const state = vi.hoisted(() => ({
   writes: [] as Array<{ op: string; table: string; payload: unknown }>,
   /** label(如 "orders.insert" / "rpc:deduct_product_stock")→ 假回應 */
   results: {} as Record<string, QueryResult>,
+  /**
+   * label → 依序消耗的回應佇列。同一個 label 在一次請求中會被打到多次時用
+   * (例:orders.select 既是冪等預查、也是撞 unique 之後的 raced 查詢,
+   * 兩者要能分別給不同回應)。佇列空了就退回 results[label]。
+   */
+  resultsQueue: {} as Record<string, QueryResult[]>,
+  /** 記錄被 console.error 吐出來的訊息 —— 用來斷言「錯誤有留下痕跡」 */
+  logs: [] as string[],
   user: null as { id: string } | null,
+  /** auth.getUser() 要回傳的 error(訪客是 AuthSessionMissingError,不是失敗) */
+  authError: null as { name: string; message: string } | null,
+  /** auth.getUser() 直接 throw(連 supabase client 都建不起來的情境) */
+  authThrows: false,
+  /** auth.getUser() 被呼叫幾次(不進 state.calls,以免動到既有的 toEqual 序列斷言) */
+  authCalls: 0,
   pointsBalance: 0,
+  /** getPointsBalance 的 ok:false = 餘額「查不到」,不是「餘額為 0」 */
+  pointsBalanceOk: true,
+  companySettingOk: true,
+  shippingSettingOk: true,
   reserveResult: { ok: true, reserved: 0 } as unknown,
   redeemResult: { ok: true } as unknown,
 }));
@@ -46,18 +64,25 @@ vi.mock("@/lib/supabase/admin", () => {
   };
   type Chain = Promise<QueryResult> & ChainMethods;
 
-  const resultFor = (label: string): QueryResult =>
-    state.results[label] ?? { data: null, error: null };
+  const resultFor = (label: string): QueryResult => {
+    const queue = state.resultsQueue[label];
+    if (queue && queue.length > 0) return queue.shift() as QueryResult;
+    return state.results[label] ?? { data: null, error: null };
+  };
 
   // 這條鏈同時是 thenable(route 有 `await supabase.from(x).delete().eq(...)`
   // 這種直接 await builder 的寫法)也帶 .single()/.maybeSingle()。
+  //
+  // ⚠️ 一條鏈只向 resultFor() 取一次值,之後 .single()/.maybeSingle() 沿用同一個 ——
+  // 否則一次查詢會從 resultsQueue 消耗掉兩筆。
   function makeChain(label: string): Chain {
-    const chain = Promise.resolve(resultFor(label)) as Chain;
+    const result = resultFor(label);
+    const chain = Promise.resolve(result) as Chain;
     chain.select = () => chain;
     chain.eq = () => chain;
     chain.in = () => chain;
-    chain.maybeSingle = () => Promise.resolve(resultFor(label));
-    chain.single = () => Promise.resolve(resultFor(label));
+    chain.maybeSingle = () => Promise.resolve(result);
+    chain.single = () => Promise.resolve(result);
     return chain;
   }
 
@@ -93,12 +118,28 @@ vi.mock("@/lib/supabase/admin", () => {
 vi.mock("@/lib/supabase/server", () => ({
   createClient: () =>
     Promise.resolve({
-      auth: { getUser: () => Promise.resolve({ data: { user: state.user }, error: null }) },
+      auth: {
+        // 刻意不寫進 state.calls:那個序列被既有測試逐項比對(toEqual),
+        // 多塞一筆就會動到既有斷言。
+        getUser: () => {
+          state.authCalls++;
+          if (state.authThrows) return Promise.reject(new Error("auth client exploded"));
+          return Promise.resolve({
+            data: { user: state.authError ? null : state.user },
+            error: state.authError,
+          });
+        },
+      },
     }),
 }));
 
 vi.mock("@/lib/points", () => ({
-  getPointsBalance: () => Promise.resolve({ balance: state.pointsBalance, expiringSoon: 0 }),
+  getPointsBalance: () =>
+    Promise.resolve({
+      balance: state.pointsBalance,
+      expiringSoon: 0,
+      ok: state.pointsBalanceOk,
+    }),
   redeemPointsForOrder: () => {
     state.calls.push("points.redeem");
     return Promise.resolve(state.redeemResult);
@@ -133,18 +174,27 @@ vi.mock("@/lib/resend", () => ({
   siteUrl: () => "http://localhost:3000",
 }));
 
-vi.mock("@/lib/settings", () => ({
-  getCompanyProfile: () =>
-    Promise.resolve({
-      name: "好日子",
-      tagline: "",
-      email: "shop@example.test",
-      phone: "0212345678",
-      address: "台北市測試路 1 號",
-    }),
-  getShippingConfig: () =>
-    Promise.resolve({ fee_home: 120, free_threshold_home: 3000, deadline_days: 3 }),
-}));
+vi.mock("@/lib/settings", () => {
+  const company = {
+    name: "好日子",
+    tagline: "",
+    email: "shop@example.test",
+    phone: "0212345678",
+    address: "台北市測試路 1 號",
+  };
+  const shipping = { fee_home: 120, free_threshold_home: 3000, deadline_days: 3 };
+  return {
+    getCompanyProfile: () => Promise.resolve(company),
+    getShippingConfig: () => Promise.resolve(shipping),
+    // *Result 版本多帶一個 ok:false = 「讀不到,value 是硬編的 fallback」。
+    // 注意 value 這裡仍給正確值 —— 測的是 route 有沒有因為 ok:false 就停下來,
+    // 而不是它會不會用到錯的數字(用了就更糟)。
+    getCompanyProfileResult: () =>
+      Promise.resolve({ value: company, ok: state.companySettingOk }),
+    getShippingConfigResult: () =>
+      Promise.resolve({ value: shipping, ok: state.shippingSettingOk }),
+  };
+});
 
 // route 必須在所有 vi.mock 之後才 import
 const { POST } = await import("@/app/api/orders/route");
@@ -190,8 +240,16 @@ function setupHappyPath(products: unknown[]) {
   state.calls.length = 0;
   state.rpcCalls.length = 0;
   state.writes.length = 0;
+  state.logs.length = 0;
+  state.resultsQueue = {};
   state.user = null;
+  state.authError = null;
+  state.authThrows = false;
+  state.authCalls = 0;
   state.pointsBalance = 0;
+  state.pointsBalanceOk = true;
+  state.companySettingOk = true;
+  state.shippingSettingOk = true;
   state.reserveResult = { ok: true, reserved: 1 };
   state.redeemResult = { ok: true };
   state.results = {
@@ -209,7 +267,11 @@ function setupHappyPath(products: unknown[]) {
 
 type CartItem = { productId: string; quantity: number; mode?: string };
 
-function checkout(items: CartItem[], extra: Record<string, unknown> = {}) {
+function checkout(
+  items: CartItem[],
+  extra: Record<string, unknown> = {},
+  headers: Record<string, string> = {}
+) {
   const body = {
     items,
     contact: {
@@ -231,7 +293,7 @@ function checkout(items: CartItem[], extra: Record<string, unknown> = {}) {
   return POST(
     new NextRequest("http://localhost:3000/api/orders", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify(body),
     })
   );
@@ -240,9 +302,22 @@ function checkout(items: CartItem[], extra: Record<string, unknown> = {}) {
 /** state.calls 中某個副作用的位置;找不到回 -1 */
 const at = (label: string) => state.calls.indexOf(label);
 
+/** 這次請求的錯誤 log 裡有沒有出現某個 scope(用來斷言「錯誤沒有被靜默吞掉」) */
+const logged = (scope: string) => state.logs.some((line) => line.includes(scope));
+
+/** orders.insert 實際寫進去的欄位 */
+const insertedOrder = () =>
+  state.writes.find((w) => w.table === "orders" && w.op === "insert")?.payload as
+    | Record<string, unknown>
+    | undefined;
+
 beforeEach(() => {
   setupHappyPath([ARTWORK]);
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  // 內容收進 state.logs:reportIssue() 一定會 console.error,所以這是「錯誤有沒有
+  // 留下痕跡」最直接的觀測點(Sentry 那一半由 tests/observability.test.ts 釘)。
+  vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+    state.logs.push(args.map((a) => (a instanceof Error ? a.message : String(a))).join(" "));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -419,5 +494,245 @@ describe("規約 3:扣庫存走 deduct_product_stock RPC 且檢查 error", () =>
     expect(res.status).toBe(200);
     expect(state.calls).not.toContain("rpc:deduct_product_stock");
     expect(state.calls).toContain("courses.reserveSeats");
+  });
+});
+
+// ===========================================================================
+// 以下為第二批:靜默吞錯(`const { data } = await supabase...` 把 error 解構掉)
+//
+// 共通症狀:「查詢失敗」與「查無資料」在程式裡長得一模一樣,於是錯誤被吞掉、流程
+// 帶著壞資料繼續往下走。每個 describe 對應 route.ts 的一處,並標明該處判定為
+// fail-closed 還是 fail-open,以及「把修法拿掉會發生什麼」。
+// ===========================================================================
+
+const IDEMPOTENT = { "Idempotency-Key": "idem-key-1" };
+const DB_DOWN = { code: "57014", message: "canceling statement due to statement timeout" };
+
+// ---------------------------------------------------------------------------
+// route.ts 冪等預查 —— fail-closed
+//
+// 理由:冪等的意義就是「不確定有沒有建過就不要再建一次」。查詢失敗時舊寫法得到
+// existing=null,與「這個 key 沒建過單」完全同義 → 直接建新單。
+//
+// 改壞方式(必須讓下面測試變紅):把 `error: existingErr` 解構拿掉、不檢查。
+// ---------------------------------------------------------------------------
+describe("冪等預查失敗必須擋下(fail-closed)", () => {
+  it("預查查詢失敗時回 503,而且絕不建立新訂單", async () => {
+    state.resultsQueue["orders.select"] = [{ data: null, error: DB_DOWN }];
+
+    const res = await checkout([{ productId: ARTWORK.id, quantity: 1 }], {}, IDEMPOTENT);
+
+    expect(res.status).toBe(503);
+    // 核心:查不出來就不能建單(否則同一個 key 可能已經有單了)
+    expect(state.calls).not.toContain("orders.insert");
+    expect(state.calls).not.toContain("payments.createPayment");
+    // 錯誤不能無聲消失
+    expect(logged("orders.idempotency-precheck-failed")).toBe(true);
+  });
+
+  it("預查查到既有訂單時照樣回既有 token(冪等本身不被改壞)", async () => {
+    state.resultsQueue["orders.select"] = [
+      { data: { public_token: "existing-token" }, error: null },
+    ];
+
+    const res = await checkout([{ productId: ARTWORK.id, quantity: 1 }], {}, IDEMPOTENT);
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ orderToken: "existing-token" });
+    expect(state.calls).not.toContain("orders.insert");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// route.ts 撞 unique 之後的 raced 查詢 —— fail-closed(整支最危險的一處)
+//
+// 理由:23505 已經證明「有一列的 idempotency_key 撞到了」= 訂單存在。此時 raced
+// 查詢再失敗,舊寫法會往下掉、回 500「訂單建立失敗」—— 訂單其實已經建好了。客人
+// 看到失敗就會重下單,重下單會拿到新的 Idempotency-Key,於是變成真的重複下單。
+//
+// 改壞方式(必須讓下面測試變紅):把 `error: racedErr` 解構拿掉、不檢查。
+// ---------------------------------------------------------------------------
+describe("撞 unique 後的 raced 查詢失敗必須擋下(fail-closed)", () => {
+  const UNIQUE_ERR = {
+    code: "23505",
+    message: 'duplicate key value violates unique constraint "orders_idempotency_key_key"',
+  };
+
+  it("raced 查詢也失敗時不可回「訂單建立失敗」,要明確叫客人不要重下單", async () => {
+    state.results["orders.insert"] = { data: null, error: UNIQUE_ERR };
+    state.resultsQueue["orders.select"] = [
+      { data: null, error: null }, // 預查:當時還沒有
+      { data: null, error: DB_DOWN }, // raced:查詢失敗
+    ];
+
+    const res = await checkout([{ productId: ARTWORK.id, quantity: 1 }], {}, IDEMPOTENT);
+    const body = (await res.json()) as { error: string };
+
+    // 500 +「訂單建立失敗」正是會誘發客人重下單的組合,絕不能是它
+    expect(res.status).toBe(503);
+    expect(body.error).not.toBe("訂單建立失敗");
+    expect(body.error).toContain("請勿重複下單");
+    expect(logged("orders.idempotency-raced-lookup-failed")).toBe(true);
+  });
+
+  it("raced 查得到既有訂單時仍回既有 token(既有安全網不被改壞)", async () => {
+    state.results["orders.insert"] = { data: null, error: UNIQUE_ERR };
+    state.resultsQueue["orders.select"] = [
+      { data: null, error: null },
+      { data: { public_token: "raced-token" }, error: null },
+    ];
+
+    const res = await checkout([{ productId: ARTWORK.id, quantity: 1 }], {}, IDEMPOTENT);
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ orderToken: "raced-token" });
+  });
+
+  it("查得到但沒有這一列(23505 來自別的 unique 約束)仍是貨真價實的建單失敗 → 500", async () => {
+    state.results["orders.insert"] = {
+      data: null,
+      error: { code: "23505", message: 'duplicate key ... "orders_order_no_key"' },
+    };
+    state.resultsQueue["orders.select"] = [
+      { data: null, error: null },
+      { data: null, error: null }, // 查詢成功,但真的沒有這個 idempotency_key
+    ];
+
+    const res = await checkout([{ productId: ARTWORK.id, quantity: 1 }], {}, IDEMPOTENT);
+
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toEqual({ error: "訂單建立失敗" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// route.ts auth.getUser() —— fail-closed(後果最重的一處)
+//
+// 理由:「auth 查不出來」被壓成 userId = null 之後,一個真的登入中的客人會拿到
+// user_id 為 null 的訂單 —— 永遠不歸戶:點數不發、課程觀看權拿不到、會員升級不
+// 生效。客人付了錢卻拿不到東西,而且那張單看起來就是一張正常的訪客單,事後查不出來。
+//
+// 「訪客本來就沒登入」則是完全正常的路徑,必須照樣能下單。auth-js 在沒有 session
+// 時回的 error 是 AuthSessionMissingError,這是兩者唯一可靠的分界。
+//
+// 改壞方式(必須讓下面測試變紅):把整段還原成 try { ... } catch {} 並不接 error。
+// ---------------------------------------------------------------------------
+describe("auth 失敗 vs 訪客未登入必須分開(fail-closed)", () => {
+  it("訪客(AuthSessionMissingError):照樣下單成功,user_id 為 null", async () => {
+    state.authError = { name: "AuthSessionMissingError", message: "Auth session missing!" };
+
+    const res = await checkout([{ productId: ARTWORK.id, quantity: 1 }]);
+
+    expect(res.status).toBe(200);
+    expect(state.authCalls).toBe(1);
+    expect(insertedOrder()?.user_id).toBeNull();
+  });
+
+  it("登入中:訂單確實綁到該帳號", async () => {
+    state.user = { id: "user-1" };
+
+    const res = await checkout([{ productId: ARTWORK.id, quantity: 1 }]);
+
+    expect(res.status).toBe(200);
+    expect(insertedOrder()?.user_id).toBe("user-1");
+  });
+
+  it("auth 服務連不上(AuthRetryableFetchError):回 503 且絕不建立不歸戶的訂單", async () => {
+    state.authError = { name: "AuthRetryableFetchError", message: "Failed to fetch" };
+
+    const res = await checkout([{ productId: ARTWORK.id, quantity: 1 }]);
+
+    expect(res.status).toBe(503);
+    // 這一條是核心:寧可不建單,也不要建一張永遠歸不了戶的單
+    expect(state.calls).not.toContain("orders.insert");
+    expect(state.calls).not.toContain("payments.createPayment");
+    expect(logged("orders.auth-getuser-failed")).toBe(true);
+  });
+
+  it("JWT 失效(AuthApiError 401):同樣擋下,不當成訪客", async () => {
+    state.authError = { name: "AuthApiError", message: "invalid claim: missing sub claim" };
+
+    const res = await checkout([{ productId: ARTWORK.id, quantity: 1 }]);
+
+    expect(res.status).toBe(503);
+    expect(state.calls).not.toContain("orders.insert");
+  });
+
+  it("getUser() 直接 throw:也是「查不出來」,不是「訪客」", async () => {
+    state.authThrows = true;
+
+    const res = await checkout([{ productId: ARTWORK.id, quantity: 1 }]);
+
+    expect(res.status).toBe(503);
+    expect(state.calls).not.toContain("orders.insert");
+    expect(logged("orders.auth-getuser-failed")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// route.ts 結帳設定(運費/免運門檻/匯款帳號)—— fail-closed
+//
+// 理由:settings 讀不到時 getSetting() 回硬編 fallback(fee_home=200 /
+// free_threshold_home=10000),與線上實際設定不同 → 等於用一組猜的價錢跟客人收錢。
+// company.bank_info 更是匯款信裡的收款帳號,取不到會寄出一封沒有帳號的請款信。
+//
+// 改壞方式(必須讓下面測試變紅):改回 getCompanyProfile()/getShippingConfig()
+// 這組 fail-open 版本,不看 ok。
+// ---------------------------------------------------------------------------
+describe("結帳設定讀不到時必須擋下(fail-closed)", () => {
+  it("運費設定讀取失敗 → 503,不以預設運費建單", async () => {
+    state.shippingSettingOk = false;
+
+    const res = await checkout([{ productId: ARTWORK.id, quantity: 1 }]);
+
+    expect(res.status).toBe(503);
+    expect(state.calls).not.toContain("orders.insert");
+    expect(logged("orders.settings-unavailable")).toBe(true);
+  });
+
+  it("公司資料讀取失敗 → 503,不寄出沒有匯款帳號的訂單信", async () => {
+    state.companySettingOk = false;
+
+    const res = await checkout([{ productId: ARTWORK.id, quantity: 1 }]);
+
+    expect(res.status).toBe(503);
+    expect(state.calls).not.toContain("orders.insert");
+    expect(state.calls).not.toContain("mail.customer");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// route.ts 點數餘額 —— fail-closed,但訊息要誠實
+//
+// 理由:getPointsBalance 查詢失敗時舊寫法 fallback 成 0,於是有 500 點的客人被擋成
+// 「點數餘額不足」。錢沒少(這是 fail-closed),但訊息是錯的 —— 客人與客服都會往
+// 「我的點數不見了」的方向查,而真正的原因是 DB 查詢失敗。
+//
+// 改壞方式(必須讓下面測試變紅):拿掉 `ok` 判斷,只看 balance。
+// ---------------------------------------------------------------------------
+describe("點數餘額查不到時不可謊稱餘額不足(fail-closed)", () => {
+  it("餘額查詢失敗 → 503,且訊息不是「點數餘額不足」", async () => {
+    state.user = { id: "user-1" };
+    state.pointsBalanceOk = false;
+    state.pointsBalance = 0; // 舊寫法的 fallback 就是這個 0
+
+    const res = await checkout([{ productId: ARTWORK.id, quantity: 1 }], { pointsUsed: 100 });
+    const body = (await res.json()) as { error: string };
+
+    expect(res.status).toBe(503);
+    expect(body.error).not.toBe("點數餘額不足");
+    expect(state.calls).not.toContain("orders.insert");
+    expect(logged("orders.points-balance-unavailable")).toBe(true);
+  });
+
+  it("餘額查得到但真的不足 → 維持原本的 400「點數餘額不足」", async () => {
+    state.user = { id: "user-1" };
+    state.pointsBalanceOk = true;
+    state.pointsBalance = 50;
+
+    const res = await checkout([{ productId: ARTWORK.id, quantity: 1 }], { pointsUsed: 100 });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "點數餘額不足" });
   });
 });

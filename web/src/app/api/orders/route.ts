@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { tryCreateAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { emailShell, notifyAdmin, sendMail, siteUrl } from "@/lib/resend";
-import { getCompanyProfile, getShippingConfig } from "@/lib/settings";
+import { getCompanyProfileResult, getShippingConfigResult } from "@/lib/settings";
+import { reportIssue } from "@/lib/observability";
 import {
   formatDate,
   formatTWD,
@@ -60,6 +61,16 @@ type CheckoutBody = {
 
 const VALID_MODES: PurchaseMode[] = ["buyout", "rental", "journey", "membership", "course"];
 
+// 「訪客沒登入」的那個 error(auth-js 在沒有 session 時回 AuthSessionMissingError),
+// 與「auth 真的查不出來」必須分開處理 —— 見下方 getUser() 那段。
+function isSessionMissingError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "AuthSessionMissingError"
+  );
+}
+
 // 依商品的 product_type 決定允許的購買模式與預設模式
 function resolveMode(productType: string, requested?: PurchaseMode): PurchaseMode | null {
   if (productType === "artwork") {
@@ -88,11 +99,22 @@ export async function POST(req: NextRequest) {
   // Idempotency-Key:同一 key 已有訂單就直接回傳既有訂單,不重複建單、不報錯
   const idempotencyKey = req.headers.get("Idempotency-Key")?.trim().slice(0, 100) || null;
   if (idempotencyKey) {
-    const { data: existing } = await supabase
+    const { data: existing, error: existingErr } = await supabase
       .from("orders")
       .select("public_token")
       .eq("idempotency_key", idempotencyKey)
       .maybeSingle();
+    // fail-closed:查詢失敗 ≠ 沒有這張單。舊寫法把 error 解構掉,兩者都得到
+    // existing=null → 直接往下建新單。撞 unique index(23505)雖然還有安全網,
+    // 但那條安全網底下還有一次同樣的查詢,兩次都失敗客人就會拿到「訂單建立失敗」。
+    // 冪等的整個意義就是「不確定就不要再建一次」,所以這裡不確定就停。
+    if (existingErr) {
+      reportIssue("orders.idempotency-precheck-failed", existingErr, { idempotencyKey });
+      return NextResponse.json(
+        { error: "系統忙碌,請稍後重試(請勿重新整理後重新下單)" },
+        { status: 503 }
+      );
+    }
     if (existing) {
       return NextResponse.json({ orderToken: existing.public_token });
     }
@@ -200,7 +222,24 @@ export async function POST(req: NextRequest) {
     (i) => i.purchase_mode === "buyout" || i.purchase_mode === "rental"
   );
 
-  const [company, shippingConfig] = await Promise.all([getCompanyProfile(), getShippingConfig()]);
+  // fail-closed:運費、免運門檻與繳費/保留期限全部出自 settings。讀不到時 getSetting
+  // 會回硬編 fallback(fee_home=200 / free_threshold_home=10000),與線上實際設定不同
+  // —— 那等於用一組猜的價錢跟客人收錢,且沒有任何痕跡。company 也一樣:bank_info 是
+  // 匯款信裡的收款帳號,取不到就會寄出一封沒有帳號的「請匯款」信。
+  const [companyResult, shippingResult] = await Promise.all([
+    getCompanyProfileResult(),
+    getShippingConfigResult(),
+  ]);
+  if (!companyResult.ok || !shippingResult.ok) {
+    reportIssue(
+      "orders.settings-unavailable",
+      new Error("結帳設定讀取失敗,拒絕以預設值建立訂單"),
+      { companyOk: companyResult.ok, shippingOk: shippingResult.ok }
+    );
+    return NextResponse.json({ error: "系統忙碌,請稍後再試" }, { status: 503 });
+  }
+  const company = companyResult.value;
+  const shippingConfig = shippingResult.value;
 
   // ---------- 收件方式 + 運費(伺服器算,不信任前端) ----------
   let shippingMethod: ShippingMethod;
@@ -270,14 +309,41 @@ export async function POST(req: NextRequest) {
     paymentMethod = "bank_transfer";
   }
 
-  // 登入使用者綁定訂單
+  // 登入使用者綁定訂單。
+  //
+  // ⚠️ 「auth 查不出來」與「訪客本來就沒登入」是兩件不同的事,舊寫法(整段 try/catch
+  // 吞掉 + 不接 error)把兩者壓成同一個 userId = null。前者的後果是:一個真的登入中的
+  // 客人拿到 user_id 為 null 的訂單 —— 永遠不歸戶,點數不發、課程觀看權拿不到、會員
+  // 升級不生效。客人付了錢卻拿不到東西,而且事後幾乎查不出原因(那張單看起來就是一張
+  // 正常的訪客單)。所以這裡 fail-closed:分不清就不要建單。
+  //
+  // 分辨方式(auth-js):沒有 session 時 getUser() 回的 error 是 AuthSessionMissingError
+  // (name 固定,見 auth-js 的 isAuthSessionMissingError)—— 那是訪客的正常路徑。
+  // 其他 error(AuthApiError 401、AuthRetryableFetchError 連不上 auth 服務…)與任何
+  // 被 throw 出來的例外,都算「查不出來」。
   let userId: string | null = null;
+  let authUnavailable: unknown = null;
   try {
     const userClient = await createClient();
-    const { data } = await userClient.auth.getUser();
-    userId = data.user?.id ?? null;
-  } catch {
-    /* 未登入照樣可下單 */
+    const { data, error: authErr } = await userClient.auth.getUser();
+    if (authErr) {
+      if (isSessionMissingError(authErr)) {
+        userId = null; // 訪客:正常路徑,照樣可下單
+      } else {
+        authUnavailable = authErr;
+      }
+    } else {
+      userId = data.user?.id ?? null;
+    }
+  } catch (err) {
+    authUnavailable = err;
+  }
+  if (authUnavailable) {
+    reportIssue("orders.auth-getuser-failed", authUnavailable);
+    return NextResponse.json(
+      { error: "無法確認登入狀態,請重新整理頁面或重新登入後再試一次" },
+      { status: 503 }
+    );
   }
 
   // 課程品項必須綁帳號:course_access(觀看權)與 course_enrollments 都以 user_id 為主鍵之一,
@@ -297,7 +363,18 @@ export async function POST(req: NextRequest) {
     if (!userId) {
       return NextResponse.json({ error: "登入後才能使用點數折抵" }, { status: 400 });
     }
-    const { balance } = await getPointsBalance(userId);
+    // fail-closed,但訊息要誠實:舊寫法的 getPointsBalance 查詢失敗會 fallback 成 0,
+    // 於是有 500 點的客人被擋成「點數餘額不足」—— 單被擋掉(錢沒少),可是客人和客服
+    // 都會以為點數不見了,往完全錯誤的方向查。分開兩種情況。
+    const { balance, ok: balanceOk } = await getPointsBalance(userId);
+    if (!balanceOk) {
+      reportIssue(
+        "orders.points-balance-unavailable",
+        new Error("點數餘額查詢失敗,拒絕以 0 當作餘額"),
+        { userId }
+      );
+      return NextResponse.json({ error: "目前無法確認點數餘額,請稍後再試" }, { status: 503 });
+    }
     if (requestedPoints > balance) {
       return NextResponse.json({ error: "點數餘額不足" }, { status: 400 });
     }
@@ -336,14 +413,34 @@ export async function POST(req: NextRequest) {
     // 併發下同一 Idempotency-Key 兩個請求都通過了前面的預查 → 其中一個會撞 unique 衝突,
     // 回傳既有訂單而不是報錯,確保重試/雙擊永遠拿到同一張訂單
     if (orderErr?.code === UNIQUE_VIOLATION && idempotencyKey) {
-      const { data: raced } = await supabase
+      const { data: raced, error: racedErr } = await supabase
         .from("orders")
         .select("public_token")
         .eq("idempotency_key", idempotencyKey)
         .maybeSingle();
+      // fail-closed:這一條沒有安全網,是整支最危險的一處。23505 已經證明「有一列的
+      // idempotency_key 撞到了」,若這次查詢又失敗,舊寫法會往下掉、回一句
+      // 「訂單建立失敗」—— 訂單其實已經存在。客人看到失敗就會重下單,而重下單會產生
+      // 新的 Idempotency-Key(CheckoutForm 的 ref 在整頁重載後就換一組),於是變成
+      // 真的重複下單、重複付款。所以這裡不能回「建立失敗」,要明確告訴客人「別重下」。
+      if (racedErr) {
+        reportIssue("orders.idempotency-raced-lookup-failed", racedErr, {
+          idempotencyKey,
+          insertError: orderErr?.message,
+        });
+        return NextResponse.json(
+          {
+            error:
+              "訂單可能已經建立,請勿重複下單。請稍候重新整理結帳頁,或到「訂單查詢」確認後再聯繫客服",
+          },
+          { status: 503 }
+        );
+      }
       if (raced) {
         return NextResponse.json({ orderToken: raced.public_token });
       }
+      // 查得到、但沒有這一列 → 23505 來自別的 unique 約束(order_no / gateway_tx_id),
+      // 那就是貨真價實的建單失敗,往下走 500。
     }
     console.error("[orders] insert failed:", orderErr);
     return NextResponse.json({ error: "訂單建立失敗" }, { status: 500 });

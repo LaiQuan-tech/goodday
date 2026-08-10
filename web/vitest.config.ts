@@ -17,6 +17,10 @@ export default defineConfig({
     // 並用 `Test Files N passed` 的檔數對一次磁碟上的檔數。
     include: ["tests/**/*.test.ts", "src/**/*.test.ts"],
     exclude: ["**/node_modules/**", "**/.next/**"],
+    // hermetic 的保險絲:把 fetch / net.connect / dns.lookup 換成會 throw 的版本,
+    // 漏掉某個 vi.mock 時會立刻炸出訊息明確的失敗,而不是安靜地打真的網路。
+    // (檔名刻意不是 *.test.ts —— 否則 CI 的 glob 漂移檢查會把它算進磁碟檔數。)
+    setupFiles: ["tests/setup.ts"],
     // 測試一律 hermetic:supabase / resend / 金流全部 vi.mock 假掉,不連任何 DB、
     // Redis 或外部 API。這裡的假 env 只是為了讓「萬一有模組在 import 期讀 env」時
     // 不會炸,不代表任何真實服務存在(URL 指向不存在的 localhost port)。
